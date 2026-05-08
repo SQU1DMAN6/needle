@@ -1,0 +1,6 @@
+PACKAGE_NAME=needle
+DESCRIPTION=Needle Algorithm for creative encryption and decryption of files
+VERSION=1.0.0
+TARGET_ARCHITECTURE=all
+TARGET_OS=all
+AUTHOR=Quan Thai
