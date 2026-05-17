@@ -3,8 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	"math"
 	"os"
+	"runtime"
+	"sort"
 
 	"needle/internal/audio"
 	"needle/internal/cli"
@@ -26,7 +27,7 @@ func main() {
 	case "decode":
 		handleDecode()
 	case "version":
-		fmt.Println("needle version 1.0.0")
+		fmt.Println("needle version 1.5.0")
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -68,17 +69,22 @@ func handleEncode() {
 	keyFile := fs.String("key", "", "key sample WAV file")
 	inputFile := fs.String("input", "", "plaintext file to encode")
 	outputFile := fs.String("output", "", "output cipher WAV file")
+	threads := fs.Int("threads", runtime.NumCPU(), "number of parallel workers")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: needle encode -key sample.wav -input plaintext.txt -output cipher.wav\n")
+		fmt.Fprintf(os.Stderr, "Usage: needle encode -key sample.wav -input plaintext.txt -output cipher.wav [-threads N]\n")
 	}
 
 	fs.Parse(os.Args[2:])
 
 	if *keyFile == "" || *inputFile == "" || *outputFile == "" {
 		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
-		fmt.Fprintf(os.Stderr, "Usage: needle encode -key sample.wav -input plaintext.txt -output cipher.wav\n")
+		fmt.Fprintf(os.Stderr, "Usage: needle encode -key sample.wav -input plaintext.txt -output cipher.wav [-threads N]\n")
 		os.Exit(1)
+	}
+
+	if *threads < 1 {
+		*threads = 1
 	}
 
 	if err := encodeFile(*keyFile, *inputFile, *outputFile); err != nil {
@@ -92,17 +98,22 @@ func handleDecode() {
 	keyFile := fs.String("key", "", "key sample WAV file")
 	inputFile := fs.String("input", "", "cipher WAV file to decode")
 	outputFile := fs.String("output", "", "output plaintext file")
+	threads := fs.Int("threads", runtime.NumCPU(), "number of parallel workers")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: needle decode -key sample.wav -input cipher.wav -output plaintext.txt\n")
+		fmt.Fprintf(os.Stderr, "Usage: needle decode -key sample.wav -input cipher.wav -output plaintext.txt [-threads N]\n")
 	}
 
 	fs.Parse(os.Args[2:])
 
 	if *keyFile == "" || *inputFile == "" || *outputFile == "" {
 		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
-		fmt.Fprintf(os.Stderr, "Usage: needle decode -key sample.wav -input cipher.wav -output plaintext.txt\n")
+		fmt.Fprintf(os.Stderr, "Usage: needle decode -key sample.wav -input cipher.wav -output plaintext.txt [-threads N]\n")
 		os.Exit(1)
+	}
+
+	if *threads < 1 {
+		*threads = 1
 	}
 
 	if err := decodeFile(*keyFile, *inputFile, *outputFile); err != nil {
@@ -138,16 +149,16 @@ func encodeFile(keyPath, inPath, outPath string) error {
 		nibbles = append(nibbles, b>>4, b&0x0f)
 	}
 
-	segmentLen := int(0.25 * float64(audio.SampleRate))
-	outputData := make([]float64, len(nibbles)*segmentLen)
+	baseLen := int(0.22 * float64(audio.SampleRate))
+	outputData := make([]float64, 0, len(nibbles)*baseLen)
 
 	prog.Update(3)
 	prog.Print()
-	engine := motion.NewEngine(keyBuf, segmentLen)
+
+	engine := motion.NewEngine(keyBuf, baseLen)
 	for i, nibble := range nibbles {
-		engine.Reset()
-		segment := engine.SynthesizeSegment(keyBuf, nibble, 0) // Use position 0 for deterministic reversibility
-		copy(outputData[i*segmentLen:(i+1)*segmentLen], segment)
+		segment := engine.SynthesizeEvent(keyBuf, nibble)
+		outputData = append(outputData, segment...)
 		if (i+1)%20 == 0 {
 			pct := int(100 * (i + 1) / len(nibbles))
 			fmt.Printf("[encode] synthesizing %d/%d nibbles (%d%%)\n", i+1, len(nibbles), pct)
@@ -186,48 +197,17 @@ func decodeFile(keyPath, inPath, outPath string) error {
 		return err
 	}
 
-	segmentLen := int(0.25 * float64(audio.SampleRate))
-	if len(cipherBuf)%segmentLen != 0 {
-		return fmt.Errorf("invalid cipher length: not a multiple of segment size")
-	}
-
 	prog.Update(3)
 	prog.Print()
 
-	// Build feature library with fresh engine for each nibble
-	library := make([]decode.Features, 16)
-	for n := 0; n < 16; n++ {
-		freshEngine := motion.NewEngine(keyBuf, segmentLen)
-		segment := freshEngine.SynthesizeSegment(keyBuf, byte(n), 0)
-		library[n] = decode.ExtractFeatures(segment)
+	nibbles, err := decodeSequence(keyBuf, cipherBuf, 8)
+	if err != nil {
+		return err
 	}
 
 	prog.Update(4)
 	prog.Print()
-	nSegments := len(cipherBuf) / segmentLen
-	nibbles := make([]byte, nSegments)
-	for i := 0; i < nSegments; i++ {
-		segment := cipherBuf[i*segmentLen : (i+1)*segmentLen]
-		best := byte(0)
-		bestDist := math.Inf(1)
 
-		features := decode.ExtractFeatures(segment)
-		for n := 0; n < 16; n++ {
-			d := decode.Distance(features, library[n])
-			if d < bestDist {
-				bestDist = d
-				best = byte(n)
-			}
-		}
-		nibbles[i] = best
-
-		if (i+1)%20 == 0 {
-			pct := int(100 * (i + 1) / nSegments)
-			fmt.Printf("[decode] classifying %d/%d segments (%d%%)\n", i+1, nSegments, pct)
-		}
-	}
-
-	// Convert nibbles back to bytes
 	decoded := make([]byte, (len(nibbles)+1)/2)
 	for i := 0; i < len(nibbles); i += 2 {
 		high := nibbles[i] & 0x0f
@@ -245,4 +225,86 @@ func decodeFile(keyPath, inPath, outPath string) error {
 	prog.Update(5)
 	prog.Complete()
 	return nil
+}
+
+// decodeCandidate tracks a stateful decoding path through the cipher buffer.
+type decodeCandidate struct {
+	engine  *motion.Engine
+	pos     int
+	cost    float64
+	nibbles []byte
+}
+
+// decodeSequence performs a stateful beam search over variable-length events.
+func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int) ([]byte, error) {
+	baseLen := int(0.22 * float64(audio.SampleRate))
+	start := decodeCandidate{
+		engine:  motion.NewEngine(keyBuf, baseLen),
+		pos:     0,
+		cost:    0,
+		nibbles: []byte{},
+	}
+
+	beam := []decodeCandidate{start}
+	complete := make([]decodeCandidate, 0)
+	targetLen := len(cipherBuf)
+
+	for len(beam) > 0 {
+		nextBeam := make([]decodeCandidate, 0, len(beam)*16)
+
+		for _, candidate := range beam {
+			if candidate.pos == targetLen {
+				complete = append(complete, candidate)
+				continue
+			}
+
+			for n := 0; n < 16; n++ {
+				branch := decodeCandidate{
+					engine:  candidate.engine.Clone(),
+					pos:     candidate.pos,
+					cost:    candidate.cost,
+					nibbles: append([]byte(nil), candidate.nibbles...),
+				}
+
+				segment := branch.engine.SynthesizeEvent(keyBuf, byte(n))
+				length := len(segment)
+				if branch.pos+length > targetLen {
+					continue
+				}
+
+				target := cipherBuf[branch.pos : branch.pos+length]
+				distance := decode.Distance(decode.ExtractFeatures(segment), decode.ExtractFeatures(target))
+				branch.cost += distance
+				branch.pos += length
+				branch.nibbles = append(branch.nibbles, byte(n))
+				nextBeam = append(nextBeam, branch)
+			}
+		}
+
+		if len(nextBeam) == 0 {
+			break
+		}
+
+		beam = pruneCandidates(nextBeam, beamWidth)
+	}
+
+	if len(complete) == 0 {
+		return nil, fmt.Errorf("failed to decode cipher: no complete path found")
+	}
+
+	sort.Slice(complete, func(i, j int) bool {
+		return complete[i].cost < complete[j].cost
+	})
+
+	return complete[0].nibbles, nil
+}
+
+func pruneCandidates(candidates []decodeCandidate, limit int) []decodeCandidate {
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].cost < candidates[j].cost
+	})
+	if len(candidates) <= limit {
+		return candidates
+	}
+	return candidates[:limit]
 }

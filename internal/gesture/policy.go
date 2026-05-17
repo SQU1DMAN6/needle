@@ -37,35 +37,63 @@ func ComputeGesturePolicy(seed uint64, byteVal byte, baseIntensity float64) *Ges
 	}
 
 	switch gestureType {
-	case 0: // Forward drag with modulation
+	case 0: // Forward drag with musical modulation
 		policy.VelocityCurve = func(t, i float64) float64 {
-			mod := math.Sin(2*math.Pi*t) * 0.2 * i
-			return (base * (0.8 + 0.2*math.Sin(2*math.Pi*t))) + mod
+			// Smooth forward motion with subtle wobble
+			mod := math.Sin(2*math.Pi*t) * 0.15 * i
+			wobble := 0.05 * math.Sin(8*math.Pi*t) * i
+			return (base * (0.75 + 0.25*math.Sin(2*math.Pi*t))) + mod + wobble
 		}
-		policy.GatingCurve = func(t, i float64) float64 { return 1.0 }
-
-	case 1: // Reverse pull with decay
-		policy.VelocityCurve = func(t, i float64) float64 {
-			return -base * (0.85 - 0.45*t)
-		}
-		policy.GatingCurve = func(t, i float64) float64 { return 1.0 }
-
-	case 2: // Baby scratch (alternating)
-		policy.VelocityCurve = func(t, i float64) float64 {
-			omega := 20.0 + 10.0*i
-			return base * math.Sin(omega*math.Pi*t)
-		}
-		policy.GatingCurve = func(t, i float64) float64 { return 0.95 }
-
-	case 3: // Transformer cut (pulsing)
-		policy.VelocityCurve = func(t, i float64) float64 { return base * 0.8 }
 		policy.GatingCurve = func(t, i float64) float64 {
-			pulses := 5 + int(i*5)
-			phase := t * float64(pulses)
-			if math.Mod(phase, 1.0) < 0.5 {
-				return 1.0
+			// Smooth crossfader fade with slight flutter
+			return 0.95 + 0.05*math.Sin(4*math.Pi*t)
+		}
+
+	case 1: // Reverse pull with realistic deceleration
+		policy.VelocityCurve = func(t, i float64) float64 {
+			// Smooth deceleration curve mimicking platter physics
+			decel := 0.85 - 0.35*t*t // Quadratic deceleration
+			return -base * (decel + 0.1*i*math.Cos(3*math.Pi*t))
+		}
+		policy.GatingCurve = func(t, i float64) float64 {
+			// Smooth envelope with slight crossfader modulation
+			return 0.97 + 0.03*math.Sin(2*math.Pi*t)
+		}
+
+	case 2: // Baby scratch (smooth alternating)
+		policy.VelocityCurve = func(t, i float64) float64 {
+			// More realistic baby scratch with smooth envelope
+			omega := 18.0 + 8.0*i
+			envelope := 1.0 - 0.2*math.Pow(t, 2) // Subtle envelope
+			return base * envelope * math.Sin(omega*math.Pi*t)
+		}
+		policy.GatingCurve = func(t, i float64) float64 {
+			// Smooth gating for realistic scratch definition
+			cutPhase := math.Mod(t*2, 1.0)
+			if cutPhase < 0.45 {
+				return 0.9 + 0.1*math.Sin(math.Pi*cutPhase/0.45)
 			}
-			return 0.0
+			return 0.05 + 0.15*math.Sin(math.Pi*(cutPhase-0.45)/0.55)
+		}
+
+	case 3: // Transformer cut (realistic crossfader cuts)
+		policy.VelocityCurve = func(t, i float64) float64 {
+			// Smooth velocity with realistic platter movement
+			return base * (0.7 + 0.3*math.Cos(2*math.Pi*t))
+		}
+		policy.GatingCurve = func(t, i float64) float64 {
+			// Realistic crossfader cut pattern with smooth transitions
+			pulses := 4 + int(i*3)
+			phase := t * float64(pulses)
+			frac := math.Mod(phase, 1.0)
+
+			// Smooth attack/release on cuts
+			if frac < 0.3 {
+				return 1.0 * (frac / 0.3) // Attack
+			} else if frac < 0.7 {
+				return 1.0 * (0.6 - (frac-0.3)*1.5) // Crossfade
+			}
+			return 0.0 + 0.2*(1.0-frac)/0.3 // Release tail
 		}
 
 	case 4: // Tape stop (smooth deceleration)
@@ -90,18 +118,24 @@ func ComputeGesturePolicy(seed uint64, byteVal byte, baseIntensity float64) *Ges
 		}
 		policy.GatingCurve = func(t, i float64) float64 { return 1.0 }
 
-	case 7: // Stutter scratch (high-frequency gating)
+	case 7: // Crab scratch (high-definition cuts)
 		policy.VelocityCurve = func(t, i float64) float64 {
-			freq := 30.0 + 30.0*i
-			return base * math.Sin(2*math.Pi*freq*t)
+			// Fast oscillation with natural decay
+			freq := 28.0 + 25.0*i
+			decay := 1.0 - 0.5*t*t // Quadratic decay
+			return base * decay * math.Sin(2*math.Pi*freq*t)
 		}
 		policy.GatingCurve = func(t, i float64) float64 {
-			pulses := 6 + int(i*6)
+			// Rapid staccato cuts with musical rhythm
+			pulses := 7 + int(i*5)
 			phase := t * float64(pulses)
-			if math.Mod(phase, 1.0) < 0.5 {
-				return 1.0
+			frac := math.Mod(phase, 1.0)
+
+			// Tight cuts with quick release
+			if frac < 0.4 {
+				return 0.7 + 0.3*math.Sin(math.Pi*frac/0.4) // Attack with curve
 			}
-			return 0.0
+			return 0.7 * math.Exp(-5*(frac-0.4)) // Exponential release
 		}
 
 	case 8: // Cosine sweep
@@ -211,13 +245,18 @@ func ComputeGesturePolicy(seed uint64, byteVal byte, baseIntensity float64) *Ges
 		}
 		policy.GatingCurve = func(t, i float64) float64 { return 1.0 }
 
-	case 22: // Triple jitter
+	case 22: // Scribble scratch (complex modulation)
 		policy.VelocityCurve = func(t, i float64) float64 {
-			n1 := 0.1 * math.Sin(35*t*math.Pi) * i
-			n2 := 0.08 * math.Cos(55*t*math.Pi) * i
-			return base*(1.0+n1+n2) + base*0.12*math.Sin(75*t*math.Pi)
+			// Two-layer oscillation mimicking scribble complexity
+			n1 := 0.12 * math.Sin(32*t*math.Pi) * i * (1.0 - 0.3*t)
+			n2 := 0.08 * math.Cos(48*t*math.Pi) * i
+			return base*(1.0+n1+n2) + base*0.1*math.Sin(60*t*math.Pi)*(1.0-t)
 		}
-		policy.GatingCurve = func(t, i float64) float64 { return 1.0 }
+		policy.GatingCurve = func(t, i float64) float64 {
+			// Rapid definition with natural flutter
+			cutFreq := 5.0 + 3.0*i
+			return 0.8 + 0.2*math.Sin(2*math.Pi*cutFreq*t) + 0.05*math.Sin(8*math.Pi*cutFreq*t)
+		}
 
 	case 23: // Fast flutter gating
 		policy.VelocityCurve = func(t, i float64) float64 {
@@ -254,13 +293,19 @@ func ComputeGesturePolicy(seed uint64, byteVal byte, baseIntensity float64) *Ges
 		}
 		policy.GatingCurve = func(t, i float64) float64 { return 1.0 }
 
-	case 27: // Fast dual oscillation
+	case 27: // Orbit scratch (smooth multi-layer oscillation)
 		policy.VelocityCurve = func(t, i float64) float64 {
-			f1 := 5.0 + 3.0*i
-			f2 := 12.0 + 5.0*i
-			return base * (0.6*math.Sin(2*math.Pi*f1*t) + 0.4*math.Cos(2*math.Pi*f2*t))
+			// Smooth combination of low and high frequency components
+			f1 := 5.0 + 2.0*i
+			f2 := 12.0 + 4.0*i
+			// Envelope for realistic feel
+			envelope := 0.9 + 0.1*math.Sin(2*math.Pi*t)
+			return base * envelope * (0.65*math.Sin(2*math.Pi*f1*t) + 0.35*math.Sin(2*math.Pi*f2*t))
 		}
-		policy.GatingCurve = func(t, i float64) float64 { return 0.85 }
+		policy.GatingCurve = func(t, i float64) float64 {
+			// Smooth crossfader modulation
+			return 0.8 + 0.2*math.Sin(3*math.Pi*t)
+		}
 
 	case 28: // Complex reverse with envelope
 		policy.VelocityCurve = func(t, i float64) float64 {
