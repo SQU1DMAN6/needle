@@ -1,432 +1,501 @@
 # IMPROVE.md
 
-# Needle 1.5 Stable Proposal
+# Needle 1.5 Stable - Procedural Audio Cryptography
 
 ## Overview
 
-Needle 1.5 Dirty successfully demonstrated that plaintext can be transformed into realistic DJ scratching audio using deterministic gesture synthesis and key-conditioned waveform generation.
+Needle began as an experiment:
 
-The system achieved:
-- perfect reversibility
-- realistic procedural scratching
-- deterministic gesture synthesis
-- strong waveform diversity
-- high decoding accuracy
+> Can plaintext be transformed into procedural DJ scratching audio while remaining reversible?
 
-However, Needle 1.5 Dirty still exposed critical structural weaknesses that fundamentally reduced the system to a classification problem.
+Needle 1.0 and Needle 1.5 Dirty successfully demonstrated:
+- deterministic audio synthesis
+- procedural gesture encoding
+- reversible waveform generation
+- key-conditioned gesture behaviour
 
-These weaknesses include:
+However, both systems still behaved structurally like:
+- waveform classification engines
+
+rather than:
+- living procedural audio systems
+
+The resulting ciphertext:
+- exposed segmentation
+- repeated gesture identities
+- leaked timing structure
+- behaved too mechanically
+- sounded more like encoded symbols than intentional audio performance
+
+Needle 1.5 Stable changes this direction completely.
+
+The new objective is not:
+- more gestures
+- larger symbol libraries
+- more complexity for its own sake
+
+The objective is:
+
+> procedural musical intelligence.
+
+Needle 1.5 Stable aims to transform plaintext into:
+- coherent procedural audio
+- rhythmically structured scratching
+- musically aware gesture composition
+- generative audio art
+
+while simultaneously:
+- increasing ambiguity
+- reducing structural leakage
+- preventing isolated waveform interpretation
+
+Needle should no longer sound like:
+- segmented cipher output
+
+Needle should sound like:
+- intentional artistic performance.
+
+---
+
+# Core Philosophy
+
+Traditional encryption destroys structure.
+
+Steganography hides structure.
+
+Needle transforms structure into:
+- rhythm
+- motion
+- texture
+- timing
+- musical behaviour
+
+The ciphertext is not intended to resemble:
+- random entropy
+
+Instead, Needle treats ciphertext as:
+- procedural audio art
+- generated musical performance
+- stateful motion synthesis
+
+The goal is not:
+- mathematical superiority over AES
+
+The goal is:
+- procedural ambiguity through artistic coherence.
+
+---
+
+# Problems With Needle 1.5 Dirty
+
+## 1. Mechanical Timing
+
+Needle 1.5 Dirty still uses:
 - fixed-length segmentation
-- stateless gesture generation
-- independently decodable waveform regions
-- deterministic reference reconstruction
-- stable feature-space geometry
-- recoverable template behaviour
-
-As a result, the system remained vulnerable to:
-- clustering attacks
-- reference-library reconstruction
-- nearest-neighbour classification
-- statistical waveform inference
-- DSP-assisted reverse engineering
-
-Needle 1.5 Stable is designed to eliminate these weaknesses.
-
-The objective is to transition Needle away from:
-- deterministic waveform classification
-
-and toward:
-- ambiguous procedural interpretation
-- continuous stateful synthesis
-- key-dependent signal geometry
-- adversarial reconstruction resistance
-
-Needle 1.5 Stable aims to ensure that:
-- incorrect keys produce coherent but false interpretations
-- ciphertext remains procedurally plausible under multiple interpretations
-- segmentation is no longer trivially recoverable
-- waveform classification alone becomes insufficient
-
-The system is not intended to replace modern cryptography mathematically.
-
-Instead, Needle explores:
-- procedural ambiguity
-- artistic signal concealment
-- stateful synthesis-based encoding
-- adversarial audio interpretation
-
-The ciphertext should resemble:
-- generative performance audio
-rather than:
-- segmented encoded symbols
-
----
-
-# Needle 1.5 Dirty Summary
-
-## Current Architecture
-
-Needle 1.5 Dirty:
-- splits plaintext into nibble values
-- synthesizes deterministic gesture segments
-- uses fixed 250ms windows
-- concatenates independently generated waveform blocks
-
-The decoder:
-- splits audio into fixed windows
-- regenerates reference gestures
-- performs ensemble distance matching
-- classifies waveform regions independently
-
-This architecture successfully achieves:
-- deterministic reversibility
-- perfect round-trip decoding
-- procedural audio realism
-
-but still behaves structurally as:
-- a deterministic DSP classification engine
-
-rather than:
-- an ambiguous procedural synthesis system
-
----
-
-# Critical Weaknesses of Needle 1.5 Dirty
-
-# 1. Fixed Segmentation Leakage
-
-The cipher waveform exposes:
-- stable timing boundaries
-- repeatable waveform windows
-- predictable structural spacing
+- predictable waveform pacing
+- isolated gesture windows
 
 This creates:
-- segmentation oracles
-- trivial chunk extraction
-- direct waveform isolation
+- visible timing structure
+- segmentation leakage
+- repetitive rhythmic behaviour
 
-Attackers can:
-- slice the waveform deterministically
-- classify regions independently
-- reconstruct symbol candidates
-
-without requiring complete system understanding.
-
----
-
-# 2. Stateless Generation
-
-Each segment is generated independently.
-
-This means:
-- no persistent synthesis state
-- no temporal carryover
-- no historical dependency
-- no evolving waveform memory
-
-As a result:
-- segments remain locally interpretable
-- waveform regions can be analyzed in isolation
-
-This fundamentally reduces the challenge to:
-- template comparison
-
----
-
-# 3. Stable Feature Geometry
-
-Needle 1.5 Dirty intentionally produces:
-- distinguishable waveform identities
-- recoverable gesture families
-- separable spectral behaviour
-
-This allows:
-- clustering attacks
-- feature extraction
-- ML-assisted classification
-- statistical template reconstruction
-
-The waveform space remains:
-- learnable
-- structured
-- classifiable
-
----
-
-# 4. Deterministic Reference Reconstruction
-
-The decoder currently reconstructs:
-- deterministic reference gestures
-
-This enables:
-- nearest-neighbour recovery
-- direct waveform matching
-- library regeneration attacks
-
-The attacker can eventually reduce the system to:
-- waveform similarity analysis
+The result sounds:
+- synthetic
+- rigid
+- machine-generated
 
 rather than:
-- procedural interpretation
+- expressive
+- human
+- musical
+
+---
+
+## 2. Stateless Gesture Behaviour
+
+Gestures are still:
+- independently synthesized
+- locally interpretable
+- procedurally isolated
+
+This reduces decoding to:
+- waveform classification
+
+rather than:
+- performance interpretation
+
+---
+
+## 3. Lack of Musical Awareness
+
+Needle currently understands:
+- gestures
+
+but not:
+- rhythm
+- groove
+- phrasing
+- musical timing
+- dynamic pacing
+- tension and release
+
+The system can generate:
+- scratching
+
+but not:
+- performance.
+
+This unintentionally exposes:
+- repeated procedural structure
+- timing regularities
+- symbolic repetition
+
+---
+
+## 4. Excessive Focus on Gesture Count
+
+Adding:
+- more gestures
+- more waveform types
+- more modulation variants
+
+does not fundamentally improve the system.
+
+A giant gesture dictionary eventually becomes:
+- larger classification space
+not:
+- better concealment
+
+Musical coherence matters more than raw gesture count.
 
 ---
 
 # Needle 1.5 Stable Objectives
 
-Needle 1.5 Stable introduces a new design philosophy:
+Needle 1.5 Stable shifts focus toward:
+- procedural musicality
+- stateful timing behaviour
+- rhythmic intelligence
+- contextual synthesis
+- artistic coherence
 
-> The ciphertext should not reveal how it should be interpreted.
+The system should:
+- sound intentional
+- evolve naturally
+- maintain groove
+- hide repetition inside musical structure
 
-The system should resist:
-- direct segmentation
-- local classification
-- isolated waveform analysis
-- deterministic template reconstruction
+The ciphertext should resemble:
+- performed audio
 
-The decoder should behave less like:
-- a waveform classifier
-
-and more like:
-- a procedural state interpreter
-
-The correct key should:
-- constrain interpretation geometry
-- collapse ambiguity
-- reconstruct procedural state evolution
-
-Incorrect keys should:
-- remain plausible
-- produce coherent but false output
-- fail silently through ambiguity rather than corruption
+rather than:
+- encoded data.
 
 ---
 
-# Mandatory Architectural Changes
+# Major Architectural Changes
 
-# 1. Remove Fixed-Length Segmentation
+# 1. Rhythmic Timing Engine
 
 ## Needle 1.5 Dirty
-- Fixed 250ms windows
+- Fixed timing windows
+- Static pacing
+- Mechanical sequencing
 
 ## Needle 1.5 Stable
-- Variable-duration procedural events
-- Overlapping temporal regions
-- Key-conditioned timing behaviour
-- Persistent transitional states
-- Non-uniform synthesis spacing
+- Beat-aware procedural timing
+- Dynamic phrase lengths
+- Groove-sensitive gesture placement
+- Humanized rhythmic drift
+- Tempo-aware transitions
+- Phrase evolution and recovery
 
-### Security Impact
-- Eliminates segmentation oracles
-- Prevents deterministic slicing
-- Forces temporal inference
+### Security Benefits
+- Removes segmentation visibility
+- Breaks deterministic timing analysis
+- Prevents clean waveform slicing
+
+### Artistic Benefits
+- Produces natural rhythmic flow
+- Creates intentional musical pacing
+- Makes output sound performed rather than encoded
 
 ---
 
-# 2. Eliminate Independent Decodability
+# 2. Procedural Note System
 
-## Needle 1.5 Dirty
-- Each waveform region decodes independently
+Needle must evolve beyond:
+- isolated gestures
 
-## Needle 1.5 Stable
-- Decoder depends on historical synthesis state
-- Previous motion influences future synthesis
-- Cross-gesture persistence becomes mandatory
-- Transitional behaviour affects interpretation
+and develop:
+- musical awareness.
 
-### Security Impact
-- Prevents isolated classification
-- Forces full-sequence reconstruction
-- Introduces cascading ambiguity
+Needle 1.5 Stable introduces:
+- procedural tonal layers
+- note dictionaries
+- harmonic gesture accompaniment
+- scale-aware synthesis
+- phrase-sensitive pitch behaviour
 
----
+The system may:
+- reuse tonal motifs
+- evolve harmonic structure
+- maintain rhythmic identity
+- create recurring musical themes
 
-# 3. Replace Template Matching with Stateful Interpretation
+without exposing:
+- symbolic repetition directly.
 
-## Needle 1.5 Dirty
-- Deterministic reference gesture generation
+### Security Benefits
+- Masks symbolic structure inside musical structure
+- Increases ambiguity through layered information
+- Prevents direct gesture equivalence
 
-## Needle 1.5 Stable
-- Stateful procedural reconstruction
-- Continuous motion inference
-- Dynamic interpretation graphs
-- Key-dependent synthesis topology
-
-### Security Impact
-- Prevents reference library attacks
-- Removes stable waveform templates
-- Breaks nearest-neighbour classification
-
----
-
-# 4. Introduce Key-Dependent Geometry
-
-## Needle 1.5 Dirty
-- Key influences gesture selection
-
-## Needle 1.5 Stable
-- Key influences:
-  - motion persistence
-  - timing grammar
-  - transition physics
-  - synthesis topology
-  - waveform evolution
-  - gesture mutation behaviour
-  - procedural state flow
-
-### Security Impact
-- Prevents universal decoders
-- Prevents stable feature-space assumptions
-- Makes incorrect decoders procedurally inconsistent
+### Artistic Benefits
+- Output becomes musically recognizable
+- Ciphertext develops identity and atmosphere
+- Audio becomes replayable and expressive
 
 ---
 
-# 5. Continuous Procedural Synthesis
+# 3. Stateful Performance Behaviour
 
 ## Needle 1.5 Dirty
-- Concatenated gesture blocks
+- Independent gestures
 
 ## Needle 1.5 Stable
-- Continuous synthesis trajectories
-- Layered waveform interaction
-- Persistent modulation carryover
-- Dynamic crossfader behaviour
-- Stateful platter simulation
-- Recursive modulation feedback
+- Context-sensitive synthesis
+- Historical motion dependency
+- Persistent platter momentum
+- Crossfader state carryover
+- Dynamic phrase evolution
+- Energy-aware transitions
 
-### Security Impact
-- Removes isolated waveform identity
-- Increases ambiguity
-- Prevents clean symbolic recovery
+Gestures should influence:
+- future timing
+- future modulation
+- future rhythmic behaviour
+
+The system behaves like:
+- an evolving performance state
+
+rather than:
+- isolated waveform generation.
+
+### Security Benefits
+- Prevents isolated decoding
+- Forces sequence interpretation
+- Removes stable local structure
+
+### Artistic Benefits
+- Produces coherent procedural flow
+- Simulates human scratching behaviour
+- Creates expressive phrasing
 
 ---
 
-# 6. Controlled Feature-Space Ambiguity
+# 4. Controlled Repetition and Motif Evolution
 
-## Needle 1.5 Dirty
-- Deliberately distinguishable gestures
+Human music repeats ideas.
 
-## Needle 1.5 Stable
-- Controlled waveform convergence
-- Near-neighbour procedural overlap
-- Contextual differentiation
-- Ambiguous spectral behaviour
+Needle should too.
 
-### Security Impact
-- Defeats naive clustering
-- Increases reconstruction uncertainty
-- Produces multiple plausible interpretations
+However:
+- exact repetition leaks structure.
+
+Needle 1.5 Stable introduces:
+- motif mutation
+- contextual repetition
+- phrase reinterpretation
+- rhythmic transformation
+- tonal variation
+
+The same plaintext regions should:
+- feel related musically
+
+without:
+- generating identical waveform identity.
+
+### Security Benefits
+- Breaks direct repetition attacks
+- Prevents symbol equivalence recovery
+- Eliminates deterministic waveform reuse
+
+### Artistic Benefits
+- Creates musical memory and continuity
+- Produces recognizable style without exact duplication
+
+---
+
+# 5. Ambiguous Interpretation Geometry
+
+Needle 1.5 Stable embraces:
+- procedural ambiguity.
+
+Without the correct key:
+- attackers may still derive coherent structure
+- attackers may still recover musical patterns
+- attackers may still reconstruct plausible output
+
+but should not reliably recover:
+- authoritative plaintext.
+
+Incorrect keys should produce:
+- believable but incorrect procedural interpretation.
+
+### Security Benefits
+- Introduces interpretive uncertainty
+- Prevents confidence in recovered plaintext
+- Makes incorrect reconstruction appear valid
+
+### Artistic Benefits
+- Different keys create different artistic realities
+- Ciphertext behaves like procedural perspective
+- Output becomes interpretation-dependent
+
+---
+
+# 6. Dynamic Gesture Intelligence
+
+Needle no longer needs:
+- hundreds of gestures.
+
+Instead, it needs:
+- intelligent gesture usage.
+
+A smaller set of:
+- expressive
+- musically aware
+- rhythmically adaptive
+- context-sensitive gestures
+
+is more valuable than:
+- massive procedural dictionaries.
+
+Gesture selection should depend on:
+- rhythmic state
+- phrase energy
+- tonal direction
+- performance continuity
+- contextual motion flow
+
+rather than:
+- pure randomness.
+
+### Security Benefits
+- Removes deterministic selection geometry
+- Prevents stable classification assumptions
+
+### Artistic Benefits
+- Produces believable scratching
+- Maintains musical cohesion
+- Creates expressive procedural behaviour
 
 ---
 
 # Decoder Philosophy
 
-Needle 1.5 Stable decoding should no longer operate as:
-- direct waveform classification
+Needle 1.5 Stable decoding should behave less like:
+- waveform classification
 
-Instead, decoding becomes:
-- procedural reconstruction
-- temporal state interpretation
-- ambiguity resolution
-- constrained synthesis inference
+and more like:
+- procedural musical interpretation.
 
-The decoder should reconstruct:
-- evolving procedural motion
-
-rather than:
-- isolated gesture identity
-
-Correct decoding depends on:
-- matching procedural geometry
-- matching synthesis evolution
-- matching state transitions
-
-rather than:
-- matching waveform fragments
-
----
-
-# Security Philosophy
-
-Needle 1.5 Stable does not claim:
-- formal cryptographic proofs
-- mathematical equivalence to AES
-- resistance under formal cryptographic models
-
-Instead, Needle explores:
-- ambiguity as resistance
-- procedural concealment
-- adversarial signal interpretation
-- artistic cryptography-inspired synthesis
-
-The intended security property is:
-
-> incorrect interpretations remain believable.
-
-Without the correct key:
-- attackers may recover patterns
-- attackers may recover procedural structure
-- attackers may recover coherent-looking output
-
-but should not reliably recover:
-- authoritative plaintext
+The decoder reconstructs:
+- evolving rhythmic state
+- tonal structure
+- synthesis behaviour
+- motion continuity
+- contextual transitions
 
 The correct key acts as:
-- an interpretation constraint
+- a constraint on interpretation geometry
+
 rather than:
 - a simple decoding parameter.
 
 ---
 
-# Expected Difficulty Shift
+# Security Philosophy
 
-| Version              | Difficulty | Core Challenge |
-|----------------------|------------|----------------|
-| Needle 1.5 Dirty     | 4 / 6      | DSP classification |
-| Needle 1.5 Stable    | 5-6 / 6    | Procedural state inference |
+Needle does not attempt to replace:
+- AES
+- ChaCha20
+- modern cryptographic systems
 
-Needle 1.5 Stable shifts the challenge from:
-- waveform classification
+Needle explores:
+- procedural concealment
+- ambiguity-driven interpretation
+- artistic ciphertext generation
+- stateful musical synthesis
 
-toward:
-- ambiguity resolution
-- temporal reconstruction
-- procedural inference
-- stateful synthesis analysis
+The intended security property is:
+
+> incorrect interpretations remain believable.
+
+Needle aims to make:
+- interpretation uncertain
+rather than:
+- ciphertext unreadable.
+
+---
+
+# Production-Ready Goals
+
+Needle 1.5 Stable should become:
+- artistically coherent
+- procedurally expressive
+- rhythmically intelligent
+- resilient to naive DSP analysis
+- capable of generating replayable audio art
+
+The system should:
+- sound intentional
+- sound human
+- sound musical
+- sound alive
+
+while remaining:
+- deterministic under the correct key
+- reversible with proper interpretation
+- procedurally ambiguous without it
 
 ---
 
 # Long-Term Vision
 
 Future Needle systems may explore:
-- probabilistic synthesis universes
-- neural-assisted procedural ambiguity
-- adversarial waveform camouflage
-- latent-space synthesis geometry
-- dynamic interpretation grammars
-- multi-layer procedural audio concealment
+- adaptive groove modelling
+- neural phrase evolution
+- genre-aware synthesis
+- procedural rhythm grammars
+- dynamic harmonic systems
+- adversarial musical camouflage
+- multi-layer procedural composition
 
 The long-term objective is to create:
 - a procedural audio cryptography-inspired medium
 
 where:
-- ciphertext behaves like generative performance
-- interpretation depends on synthesis geometry
-- ambiguity itself becomes part of the security model
+- ciphertext behaves like music
+- interpretation behaves like performance analysis
+- ambiguity becomes part of the artistic language itself
 
 ---
 
 # Final Notes
 
-Needle is not intended to imitate traditional encryption mechanically.
+Needle is not:
+- traditional encryption
+- steganography
+- compression
 
-Needle exists to explore:
-- procedural audio concealment
-- ambiguity-driven interpretation
-- stateful synthesis as encoding
-- artistic cryptography-inspired systems
+Needle is:
+- procedural artistic concealment.
 
 Needle 1.5 Stable represents the transition from:
-- deterministic waveform classification
+- encoded waveform gestures
 
 to:
-- continuous adversarial procedural audio interpretation.
+- stateful generative musical behaviour.

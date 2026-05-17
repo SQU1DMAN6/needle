@@ -38,11 +38,11 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `Needle - Key-Conditioned Audio Gesture Cipher v2.0.0
+	fmt.Fprintf(os.Stderr, `Needle - Key-Conditioned Audio Gesture Cipher v1.5.0
 
 Usage:
-  needle encode  -key sample.wav -input plaintext.txt -output cipher.wav
-  needle decode  -key sample.wav -input cipher.wav -output plaintext.txt
+  needle encode  -key sample.wav -input plaintext.txt -output cipher.wav [-qq]
+  needle decode  -key sample.wav -input cipher.wav -output plaintext.txt [-qq]
   needle version
   needle help
 
@@ -51,12 +51,16 @@ Encode:
   -key:    path to key sample WAV file (required)
   -input:  path to plaintext file to encode (required)
   -output: path to output cipher WAV file (required)
+  -q:      quiet mode (suppress progress output)
+  -qq:     verbose mode (show gesture details, physics state)
 
 Decode:
   Decode cipher audio back into plaintext using the original key sample.
   -key:    path to key sample WAV file (required)
   -input:  path to cipher WAV file to decode (required)
   -output: path to output plaintext file (required)
+  -q:      quiet mode
+  -qq:     verbose mode
 
 Requirements:
   - Mono WAV files at 44100 Hz, 16-bit
@@ -70,9 +74,11 @@ func handleEncode() {
 	inputFile := fs.String("input", "", "plaintext file to encode")
 	outputFile := fs.String("output", "", "output cipher WAV file")
 	threads := fs.Int("threads", runtime.NumCPU(), "number of parallel workers")
+	quiet := fs.Bool("q", false, "quiet mode")
+	verbose := fs.Bool("qq", false, "verbose mode (detailed progress)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: needle encode -key sample.wav -input plaintext.txt -output cipher.wav [-threads N]\n")
+		fmt.Fprintf(os.Stderr, "Usage: needle encode -key sample.wav -input plaintext.txt -output cipher.wav [-threads N] [-q|-qq]\n")
 	}
 
 	fs.Parse(os.Args[2:])
@@ -87,7 +93,14 @@ func handleEncode() {
 		*threads = 1
 	}
 
-	if err := encodeFile(*keyFile, *inputFile, *outputFile); err != nil {
+	verbosity := cli.VerbosityNormal
+	if *quiet {
+		verbosity = cli.VerbosityQuiet
+	} else if *verbose {
+		verbosity = cli.VerbosityVerbose
+	}
+
+	if err := encodeFile(*keyFile, *inputFile, *outputFile, verbosity); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -99,9 +112,11 @@ func handleDecode() {
 	inputFile := fs.String("input", "", "cipher WAV file to decode")
 	outputFile := fs.String("output", "", "output plaintext file")
 	threads := fs.Int("threads", runtime.NumCPU(), "number of parallel workers")
+	quiet := fs.Bool("q", false, "quiet mode")
+	verbose := fs.Bool("qq", false, "verbose mode (detailed progress)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: needle decode -key sample.wav -input cipher.wav -output plaintext.txt [-threads N]\n")
+		fmt.Fprintf(os.Stderr, "Usage: needle decode -key sample.wav -input cipher.wav -output plaintext.txt [-threads N] [-q|-qq]\n")
 	}
 
 	fs.Parse(os.Args[2:])
@@ -116,14 +131,22 @@ func handleDecode() {
 		*threads = 1
 	}
 
-	if err := decodeFile(*keyFile, *inputFile, *outputFile); err != nil {
+	verbosity := cli.VerbosityNormal
+	if *quiet {
+		verbosity = cli.VerbosityQuiet
+	} else if *verbose {
+		verbosity = cli.VerbosityVerbose
+	}
+
+	if err := decodeFile(*keyFile, *inputFile, *outputFile, verbosity); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func encodeFile(keyPath, inPath, outPath string) error {
+func encodeFile(keyPath, inPath, outPath string, verbosity int) error {
 	prog := cli.NewProgress(5, "encode")
+	prog.SetVerbosity(verbosity)
 
 	prog.Update(1)
 	prog.Print()
@@ -156,12 +179,29 @@ func encodeFile(keyPath, inPath, outPath string) error {
 	prog.Print()
 
 	engine := motion.NewEngine(keyBuf, baseLen)
+	syntheticNibbles := cli.NewProgress(len(nibbles), "synthesize")
+	syntheticNibbles.SetVerbosity(verbosity)
+
 	for i, nibble := range nibbles {
 		segment := engine.SynthesizeEvent(keyBuf, nibble)
+		if verbosity == cli.VerbosityVerbose {
+			syntheticNibbles.SetGestureInfo(
+				engine.LastGesture,
+				engine.LastIntensity,
+				float64(len(segment))/float64(audio.SampleRate),
+			)
+			if engine.Physics != nil {
+				syntheticNibbles.SetPhysicsInfo(
+					engine.Physics.PlatterVelocity,
+					engine.Physics.StylusDrag,
+					engine.CrossfaderPos,
+				)
+			}
+		}
 		outputData = append(outputData, segment...)
-		if (i+1)%20 == 0 {
-			pct := int(100 * (i + 1) / len(nibbles))
-			fmt.Printf("[encode] synthesizing %d/%d nibbles (%d%%)\n", i+1, len(nibbles), pct)
+		if (i+1)%50 == 0 || i == len(nibbles)-1 {
+			syntheticNibbles.Update(i + 1)
+			syntheticNibbles.Print()
 		}
 	}
 
@@ -176,8 +216,9 @@ func encodeFile(keyPath, inPath, outPath string) error {
 	return nil
 }
 
-func decodeFile(keyPath, inPath, outPath string) error {
+func decodeFile(keyPath, inPath, outPath string, verbosity int) error {
 	prog := cli.NewProgress(5, "decode")
+	prog.SetVerbosity(verbosity)
 
 	prog.Update(1)
 	prog.Print()
@@ -200,7 +241,7 @@ func decodeFile(keyPath, inPath, outPath string) error {
 	prog.Update(3)
 	prog.Print()
 
-	nibbles, err := decodeSequence(keyBuf, cipherBuf, 8)
+	nibbles, err := decodeSequence(keyBuf, cipherBuf, 8, verbosity)
 	if err != nil {
 		return err
 	}
@@ -236,7 +277,7 @@ type decodeCandidate struct {
 }
 
 // decodeSequence performs a stateful beam search over variable-length events.
-func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int) ([]byte, error) {
+func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) ([]byte, error) {
 	baseLen := int(0.22 * float64(audio.SampleRate))
 	start := decodeCandidate{
 		engine:  motion.NewEngine(keyBuf, baseLen),
@@ -248,9 +289,14 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int) ([]byte, error) 
 	beam := []decodeCandidate{start}
 	complete := make([]decodeCandidate, 0)
 	targetLen := len(cipherBuf)
+	iteration := 0
+
+	decodeProg := cli.NewProgress(targetLen/baseLen, "beam_search")
+	decodeProg.SetVerbosity(verbosity)
 
 	for len(beam) > 0 {
 		nextBeam := make([]decodeCandidate, 0, len(beam)*16)
+		iteration++
 
 		for _, candidate := range beam {
 			if candidate.pos == targetLen {
@@ -286,6 +332,15 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int) ([]byte, error) 
 		}
 
 		beam = pruneCandidates(nextBeam, beamWidth)
+
+		// Report decode progress
+		if len(beam) > 0 {
+			decodeProg.Update(beam[0].pos / baseLen)
+			decodeProg.SetCostInfo(beam[0].cost, len(beam), beam[0].pos)
+			if iteration%5 == 0 {
+				decodeProg.Print()
+			}
+		}
 	}
 
 	if len(complete) == 0 {
