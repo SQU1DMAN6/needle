@@ -6,6 +6,8 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"sync"
+	"time"
 
 	"needle/internal/audio"
 	"needle/internal/cli"
@@ -149,7 +151,6 @@ func encodeFile(keyPath, inPath, outPath string, verbosity int) error {
 	prog.SetVerbosity(verbosity)
 
 	prog.Update(1)
-	prog.Print()
 	keyBuf, err := audio.LoadWAV(keyPath)
 	if err != nil {
 		return err
@@ -160,7 +161,6 @@ func encodeFile(keyPath, inPath, outPath string, verbosity int) error {
 	}
 
 	prog.Update(2)
-	prog.Print()
 	plain, err := os.ReadFile(inPath)
 	if err != nil {
 		return err
@@ -176,7 +176,6 @@ func encodeFile(keyPath, inPath, outPath string, verbosity int) error {
 	outputData := make([]float64, 0, len(nibbles)*baseLen)
 
 	prog.Update(3)
-	prog.Print()
 
 	engine := motion.NewEngine(keyBuf, baseLen)
 	syntheticNibbles := cli.NewProgress(len(nibbles), "synthesize")
@@ -201,12 +200,10 @@ func encodeFile(keyPath, inPath, outPath string, verbosity int) error {
 		outputData = append(outputData, segment...)
 		if (i+1)%50 == 0 || i == len(nibbles)-1 {
 			syntheticNibbles.Update(i + 1)
-			syntheticNibbles.Print()
 		}
 	}
 
 	prog.Update(4)
-	prog.Print()
 	if err := audio.SaveWAV(outPath, outputData); err != nil {
 		return err
 	}
@@ -221,7 +218,6 @@ func decodeFile(keyPath, inPath, outPath string, verbosity int) error {
 	prog.SetVerbosity(verbosity)
 
 	prog.Update(1)
-	prog.Print()
 	keyBuf, err := audio.LoadWAV(keyPath)
 	if err != nil {
 		return err
@@ -232,14 +228,12 @@ func decodeFile(keyPath, inPath, outPath string, verbosity int) error {
 	}
 
 	prog.Update(2)
-	prog.Print()
 	cipherBuf, err := audio.LoadWAV(inPath)
 	if err != nil {
 		return err
 	}
 
 	prog.Update(3)
-	prog.Print()
 
 	nibbles, err := decodeSequence(keyBuf, cipherBuf, 8, verbosity)
 	if err != nil {
@@ -247,7 +241,6 @@ func decodeFile(keyPath, inPath, outPath string, verbosity int) error {
 	}
 
 	prog.Update(4)
-	prog.Print()
 
 	decoded := make([]byte, (len(nibbles)+1)/2)
 	for i := 0; i < len(nibbles); i += 2 {
@@ -294,22 +287,33 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 	decodeProg := cli.NewProgress(targetLen/baseLen, "beam_search")
 	decodeProg.SetVerbosity(verbosity)
 
+	// feature cache for target slices: map[pos]map[length]Features
+	featureCache := make(map[int]map[int]decode.Features)
+	var fcMutex sync.Mutex
+	var completeMutex sync.Mutex
+
 	for len(beam) > 0 {
-		nextBeam := make([]decodeCandidate, 0, len(beam)*16)
+		// Parallel expansion of beam candidates into nextBeam using worker pool
+		nextBeamCh := make(chan decodeCandidate, len(beam)*16)
+		var wg sync.WaitGroup
+		workers := runtime.NumCPU()
 		iteration++
 
-		for _, candidate := range beam {
-			if candidate.pos == targetLen {
-				complete = append(complete, candidate)
-				continue
+		// worker function expands candidates
+		expand := func(c decodeCandidate) {
+			defer wg.Done()
+			if c.pos == targetLen {
+				completeMutex.Lock()
+				complete = append(complete, c)
+				completeMutex.Unlock()
+				return
 			}
-
 			for n := 0; n < 16; n++ {
 				branch := decodeCandidate{
-					engine:  candidate.engine.Clone(),
-					pos:     candidate.pos,
-					cost:    candidate.cost,
-					nibbles: append([]byte(nil), candidate.nibbles...),
+					engine:  c.engine.Clone(),
+					pos:     c.pos,
+					cost:    c.cost,
+					nibbles: append([]byte(nil), c.nibbles...),
 				}
 
 				segment := branch.engine.SynthesizeEvent(keyBuf, byte(n))
@@ -318,13 +322,65 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 					continue
 				}
 
-				target := cipherBuf[branch.pos : branch.pos+length]
-				distance := decode.Distance(decode.ExtractFeatures(segment), decode.ExtractFeatures(target))
+				pos := branch.pos
+				var targetFeatures decode.Features
+				fcMutex.Lock()
+				if m, ok := featureCache[pos]; ok {
+					if f, ok2 := m[length]; ok2 {
+						targetFeatures = f
+						fcMutex.Unlock()
+					} else {
+						fcMutex.Unlock()
+						target := cipherBuf[pos : pos+length]
+						tf := decode.ExtractFeatures(target)
+						fcMutex.Lock()
+						m[length] = tf
+						targetFeatures = tf
+						fcMutex.Unlock()
+					}
+				} else {
+					fcMutex.Unlock()
+					target := cipherBuf[pos : pos+length]
+					tf := decode.ExtractFeatures(target)
+					fcMutex.Lock()
+					m := make(map[int]decode.Features)
+					m[length] = tf
+					featureCache[pos] = m
+					targetFeatures = tf
+					fcMutex.Unlock()
+				}
+
+				segFeatures := decode.ExtractFeatures(segment)
+				distance := decode.Distance(segFeatures, targetFeatures)
+
 				branch.cost += distance
 				branch.pos += length
 				branch.nibbles = append(branch.nibbles, byte(n))
-				nextBeam = append(nextBeam, branch)
+				nextBeamCh <- branch
 			}
+		}
+
+		// dispatch workers for each candidate
+		for _, c := range beam {
+			wg.Add(1)
+			go expand(c)
+			// throttle to workers count
+			if wgCounter := runtime.NumGoroutine(); wgCounter > workers*4 {
+				// slight backpressure
+				time.Sleep(1 * time.Millisecond)
+			}
+		}
+
+		// close nextBeamCh when done
+		go func() {
+			wg.Wait()
+			close(nextBeamCh)
+		}()
+
+		// collect nextBeam
+		nextBeam := make([]decodeCandidate, 0, len(beam)*16)
+		for b := range nextBeamCh {
+			nextBeam = append(nextBeam, b)
 		}
 
 		if len(nextBeam) == 0 {

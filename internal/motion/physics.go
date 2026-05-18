@@ -30,8 +30,8 @@ type PhysicsState struct {
 func NewPhysicsState() *PhysicsState {
 	return &PhysicsState{
 		PlatterVelocity:  0.0,
-		PlatterInertia:   0.92, // 92% momentum retention (smooth, realistic)
-		PlatterFriction:  0.08, // 8% natural friction per sample
+		PlatterInertia:   0.90, // slightly lower to allow punchier motion
+		PlatterFriction:  0.06, // reduced friction for more energy
 		StylusDrag:       0.0,
 		StylusForce:      0.5,
 		CrossfaderPos:    0.5,
@@ -46,21 +46,21 @@ func NewPhysicsState() *PhysicsState {
 // ApplyPlatterPhysics simulates platter inertia, friction, and motor effects
 // Returns the actual platter velocity after physics simulation
 func (ps *PhysicsState) ApplyPlatterPhysics(targetVel float64, motorForce float64) float64 {
-	// Motor assistance
-	ps.MotorTorque = motorForce * 0.15
+	// Motor assistance (increased for punchier response)
+	ps.MotorTorque = motorForce * 0.25
 
 	// Calculate acceleration needed
 	velocityError := targetVel - ps.PlatterVelocity
-	acceleration := velocityError * 0.12 // Response speed
+	acceleration := velocityError * 0.18 // faster response for aggressive scratching
 
 	// Apply motor assist to acceleration
 	acceleration = (acceleration + ps.MotorTorque) * ps.MotorInertia
 
-	// Clamp acceleration to realistic limits
-	if acceleration > 0.15 {
-		acceleration = 0.15
-	} else if acceleration < -0.15 {
-		acceleration = -0.15
+	// Clamp acceleration to realistic but stronger limits
+	if acceleration > 0.22 {
+		acceleration = 0.22
+	} else if acceleration < -0.22 {
+		acceleration = -0.22
 	}
 
 	ps.AccelerationRate = acceleration

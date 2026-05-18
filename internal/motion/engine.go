@@ -28,6 +28,7 @@ type Engine struct {
 	LastGesture   int
 	LastIntensity float64
 	Physics       *PhysicsState
+	SegmentBuf    []float64
 }
 
 // NewEngine creates a new motion synthesis engine
@@ -46,6 +47,7 @@ func NewEngine(keyData []float64, segmentLen int) *Engine {
 		LastGesture:   -1,
 		LastIntensity: 0.6,
 		Physics:       NewPhysicsState(),
+		SegmentBuf:    nil,
 	}
 }
 
@@ -68,10 +70,10 @@ func (e *Engine) EventLen(byteVal byte) int {
 		phraseFactor = 1.15
 	}
 
-	// Increased from 160-340ms to 300-700ms for realistic scratching
+	// Adjusted for faster events: clamp to 150-400ms
 	length := int(sub*beatSamples*phraseFactor + drift)
-	minLen := int(math.Round(0.30 * float64(audio.SampleRate))) // 300ms minimum
-	maxLen := int(math.Round(0.70 * float64(audio.SampleRate))) // 700ms maximum
+	minLen := int(math.Round(0.15 * float64(audio.SampleRate))) // 150ms minimum
+	maxLen := int(math.Round(0.40 * float64(audio.SampleRate))) // 400ms maximum
 	if length < minLen {
 		length = minLen
 	}
@@ -112,6 +114,7 @@ func (e *Engine) Clone() *Engine {
 		LastGesture:   e.LastGesture,
 		LastIntensity: e.LastIntensity,
 		Physics:       physicsCopy,
+		SegmentBuf:    nil,
 	}
 }
 
@@ -123,40 +126,67 @@ func (e *Engine) SynthesizeEvent(source []float64, byteVal byte) []float64 {
 		e.KeySignature, byteVal, e.SegmentIndex,
 		e.BeatPosition, e.PhraseEnergy, e.LastGesture,
 	)
-	intensity := 0.35 + 0.65*float64(byteVal&0x0f)/15.0
+	// Increased base intensity for more aggressive, Sid Wilson-like style
+	intensity := 0.45 + 0.8*float64(byteVal&0x0f)/15.0
 	context := e.GetPerformanceContext()
 	policy := gesture.ComputeGesturePolicy(seed, byteVal, intensity, context)
 
-	segment := make([]float64, eventLen)
-
-	pitchShift := 0.85 + 0.3*float64(int(byteVal&0x0f))/15.0
+	// reuse per-engine buffer to reduce allocations
+	if cap(e.SegmentBuf) < eventLen {
+		e.SegmentBuf = make([]float64, eventLen)
+	}
+	segment := e.SegmentBuf[:eventLen]
+	pitchShift := 0.8 + 0.5*float64(int(byteVal&0x0f))/15.0
 	targetFader := 0.4 + 0.6*policy.Intensity
 
+	// local copies to reduce repeated field access
+	srcLen := len(source)
+	statePos := e.State.Position
+	stateVel := e.State.Velocity
+	physics := e.Physics
+
+	invDen := 0.0
+	if eventLen > 1 {
+		invDen = 1.0 / float64(eventLen-1)
+	}
+
+	gateMod := policy.GateModulation
+
 	for i := 0; i < eventLen; i++ {
-		t := 0.0
-		if eventLen > 1 {
-			t = float64(i) / float64(eventLen-1)
+		var t float64
+		if invDen > 0 {
+			t = float64(i) * invDen
+		} else {
+			t = 0.0
 		}
 
 		rawVel := policy.VelocityCurve(t, policy.Intensity)
 		targetVel := rawVel * pitchShift
-		if e.Physics != nil {
-			targetVel = e.Physics.ApplyPlatterPhysics(targetVel, 0.04)
-			targetVel -= e.Physics.ApplyStylusDrag(0.25)
+		if physics != nil {
+			targetVel = physics.ApplyPlatterPhysics(targetVel, 0.04)
+			targetVel -= physics.ApplyStylusDrag(0.25)
 		}
 
-		e.State.Velocity += clamp(targetVel-e.State.Velocity, -0.12, 0.12)
-		e.State.Position = audio.WrapPosition(e.State.Position+e.State.Velocity, len(source))
+		stateVel += clamp(targetVel-stateVel, -0.18, 0.18)
+		statePos = audio.WrapPosition(statePos+stateVel, srcLen)
 
-		sample := audio.SampleAt(source, e.State.Position)
+		sample := audio.SampleAt(source, statePos)
 
-		gate := policy.GatingCurve(t, policy.Intensity)
-		e.CrossfaderPos = e.Physics.UpdateCrossfader(targetFader)
+		gate := policy.GatingCurve(t, policy.Intensity) * gateMod
+		if physics != nil {
+			e.CrossfaderPos = physics.UpdateCrossfader(targetFader)
+		} else {
+			e.CrossfaderPos = targetFader
+		}
 		smoothedGate := smoothGate(gate*e.CrossfaderPos, t)
 
 		segment[i] = sample * smoothedGate
 		e.State.LastGate = gate
 	}
+
+	// write back optimized locals
+	e.State.Position = statePos
+	e.State.Velocity = stateVel
 
 	e.LastGesture = policy.Type
 	e.LastIntensity = policy.Intensity
@@ -174,7 +204,7 @@ func (e *Engine) updatePhrase(byteVal byte, eventLen int) {
 	}
 
 	targetEnergy := 0.3 + 0.7*float64(byteVal&0x0f)/15.0
-	e.PhraseEnergy += (targetEnergy - e.PhraseEnergy) * 0.08
+	e.PhraseEnergy += (targetEnergy - e.PhraseEnergy) * 0.12
 	if e.PhraseEnergy < 0.1 {
 		e.PhraseEnergy = 0.1
 	} else if e.PhraseEnergy > 1.0 {

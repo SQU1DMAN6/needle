@@ -69,8 +69,8 @@ func (e *Engine) EventLen(byteVal byte) int {
     }
     
     length := int(sub * beatSamples * phraseFactor)
-    // Clamp to 300-700ms for realistic scratching
-    return clamp(length, 300*44.1, 700*44.1)
+    // Clamp to 150-400ms for realistic, faster events
+    return clamp(length, 150*44.1, 400*44.1)
 }
 ```
 
@@ -250,7 +250,7 @@ Needle assumes:
 ### Encoding
 
 - Gesture synthesis: O(n_nibbles * event_length)
-- Event length: 300-700ms (13,230-30,870 samples at 44.1 kHz)
+- Event length: 150-400ms (6,615-17,640 samples at 44.1 kHz)
 - Rate: ~50-100 nibbles/second
 - Memory: Minimal (streaming synthesis)
 
@@ -258,7 +258,8 @@ Needle assumes:
 
 - Beam search: O(n_candidates * 16 * feature_extraction)
 - Beam width: 8 (tunable)
-- Rate: ~5-20 nibbles/second
+- Improvements: parallel beam expansion and a target feature cache reduce redundant work; tune `-threads` for best throughput
+- Rate: variable depending on CPU and beam width (small tests: ~5-30 nibbles/second)
 - Memory: O(beamWidth * state_size)
 
 ### Audio Quality
@@ -271,7 +272,8 @@ Needle assumes:
 ## Recent Improvements (Needle 1.5 Stable)
 
 ### Realism (Issue #1)
-- ✅ Gesture duration: 300-700ms (was 160-340ms)
+- ✅ Gesture duration: 150-400ms (was 300-700ms in earlier drafts)
+- ✅ Increased base intensity and velocity response for punchier, more aggressive scratching (inspired by Sid Wilson / Craig Jones)
 - ✅ Oscillation frequencies reduced 2-4x (baby scratch: 3-5 Hz not 18 Hz)
 - ✅ Fewer crossfader cuts (3-5 not 7-12)
 - ✅ Eliminated high-frequency "beep" artifacts

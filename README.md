@@ -16,7 +16,7 @@ Needle is not traditional encryption. Instead, it transforms plaintext into proc
 Needle 1.5 Stable is built around **stateful procedural synthesis**:
 
 1. **Key-Conditioned Gesture Engine**: Each plaintext byte selects a gesture from 32 musically-realistic scratching techniques, deterministically seeded by the key sample and cryptographic state mixing
-2. **Rhythmic Timing Engine**: Gestures have variable durations (300-700ms) based on tempo, beat position, and phrase structure, not fixed segmentation
+2. **Rhythmic Timing Engine**: Gestures have variable durations (150-400ms) based on tempo, beat position, and phrase structure, not fixed segmentation
 3. **Performance State Machine**: Platter momentum, crossfader position, phrase energy, and gesture history influence synthesis behavior
 4. **Stateful Decoder**: Beam search interprets gesture sequences as performance continuity, not isolated classification
 
@@ -49,7 +49,7 @@ Needle 1.5 Stable is built around **stateful procedural synthesis**:
 
 ## Features
 
-### Gesture Realism (300-700ms events)
+### Gesture Realism (150-400ms events)
 - **Forward/Reverse**: Smooth platter motion with realistic deceleration
 - **Baby Scratch**: 3-5 Hz alternating motion (musical humanization)
 - **Transformer**: 2-4 crossfader cuts per gesture with clean attack/release
@@ -57,6 +57,7 @@ Needle 1.5 Stable is built around **stateful procedural synthesis**:
 - **Tape Stop**: Smooth fade to silence
 - **Scribble**: Complex multi-layer modulation
 - Plus 25 more variants for rich procedural diversity
+- **Increased punch/energy**: base intensity and velocity response were tuned for a more aggressive turntablism style (inspired by Sid Wilson and Craig Jones), while keeping physics realism.
 
 ### Security Properties
 - **State Mixing**: Gesture selection depends on key + plaintext + position + phrase context + performance state
@@ -79,11 +80,11 @@ Needle 1.5 Stable is built around **stateful procedural synthesis**:
 
 ## Installation
 
-Clone and build from source:
+Build from source inside the `src/` directory:
 
 ```bash
-cd needle
-go build -o needle main.go
+cd src
+go build ./...
 ```
 
 ## Usage
@@ -177,7 +178,7 @@ diff message.txt recovered.txt
 ## Performance
 
 - **Encoding**: ~50-100 nibbles/second on modern CPU (depends on sample complexity)
-- **Decoding**: ~10-30 nibbles/second with beam width 8 (exponential search cost)
+- **Decoding**: Improved beam-search with optional parallel expansion and feature caching; decode time depends on `-threads` and `beam width` (small test: ~5-30 nibbles/second depending on CPU and beam width).
 - **Memory**: ~50-200 MB per minute of audio
 - **Quality**: Mono 44.1 kHz 16-bit (telephony quality)
 

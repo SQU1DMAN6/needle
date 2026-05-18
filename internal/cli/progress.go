@@ -25,6 +25,7 @@ type Progress struct {
 	gestureInfo string
 	physicsInfo string
 	costInfo    string
+	firstPrint  bool
 }
 
 // NewProgress creates a new progress tracker
@@ -36,6 +37,7 @@ func NewProgress(total int, stage string) *Progress {
 		verbosity:  VerbosityNormal,
 		startTime:  time.Now(),
 		lastUpdate: time.Now(),
+		firstPrint: true,
 	}
 }
 
@@ -85,14 +87,35 @@ func (p *Progress) Print() {
 	pct := int(100 * p.current / p.total)
 	elapsed := time.Since(p.startTime).Seconds()
 
-	// Normal verbosity: standard progress bar
+	// Normal verbosity: compact single-line progress with ETA
 	if p.verbosity == VerbosityNormal {
 		remaining := 0.0
 		if p.itemsPerSec > 0 && p.current < p.total {
 			remaining = float64(p.total-p.current) / p.itemsPerSec
 		}
-		fmt.Printf("[%s] %d/%d (%d%%) %.1f/s | ETA %.0fs\n",
-			p.stage, p.current, p.total, pct, p.itemsPerSec, remaining)
+
+		// progress bar
+		barWidth := 30
+		filled := int(float64(barWidth) * float64(p.current) / float64(p.total))
+		if filled > barWidth {
+			filled = barWidth
+		}
+		bar := ""
+		for i := 0; i < filled; i++ {
+			bar += "#"
+		}
+		for i := filled; i < barWidth; i++ {
+			bar += "-"
+		}
+
+		fmt.Printf("\r[%s] [%s] %d/%d (%d%%) %.1f/s ETA %.0fs",
+			p.stage, bar, p.current, p.total, pct, p.itemsPerSec, remaining)
+		if p.firstPrint {
+			p.firstPrint = false
+		}
+		if p.current >= p.total {
+			fmt.Println("")
+		}
 		return
 	}
 

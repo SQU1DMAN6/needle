@@ -18,11 +18,12 @@ type PerformanceContext struct {
 
 // GesturePolicy defines how a gesture should be synthesized
 type GesturePolicy struct {
-	Type          int
-	VelocityCurve func(t, intensity float64) float64
-	GatingCurve   func(t, intensity float64) float64
-	Intensity     float64
-	DurationMult  float64
+	Type           int
+	VelocityCurve  func(t, intensity float64) float64
+	GatingCurve    func(t, intensity float64) float64
+	Intensity      float64
+	DurationMult   float64
+	GateModulation float64
 }
 
 // ComputeGesturePolicy generates a gesture policy from a seed
@@ -41,13 +42,18 @@ func ComputeGesturePolicy(seed uint64, byteVal byte, baseIntensity float64, ctx 
 		intensity = 1.0
 	}
 
-	base := 0.6 + 0.6*intensity
+	// Increase base amplitude for more energetic scratching
+	base := 0.8 + 0.8*intensity
 
 	policy := &GesturePolicy{
 		Type:         gestureType,
 		Intensity:    intensity,
 		DurationMult: durationVar,
 	}
+
+	// Variety: small random gate modulation to avoid repetition
+	gateModulation := 0.85 + 0.30*rng.Next()
+	policy.GateModulation = gateModulation
 
 	switch gestureType {
 	case 0: // Forward drag with musical modulation
