@@ -2,8 +2,8 @@ package inspect
 
 import (
 	"fmt"
-	"math"
 	"os"
+	"sort"
 
 	"needle/internal/audio"
 	"needle/internal/decode"
@@ -70,7 +70,7 @@ func EncodePlaintext(keyBuf []float64, plain []byte) ([]float64, []GestureRecord
 	records := make([]GestureRecord, 0, len(nibbles))
 
 	for i, nibble := range nibbles {
-		segment := engine.SynthesizeEvent(keyBuf, nibble)
+		segment := engine.SynthesizeEvent(keyBuf, nibble, i == len(nibbles)-1)
 		output = append(output, segment...)
 		records = append(records, GestureRecord{
 			Index:           i,
@@ -89,57 +89,103 @@ func EncodePlaintext(keyBuf []float64, plain []byte) ([]float64, []GestureRecord
 	return output, records, nil
 }
 
-func InspectCipher(keyBuf, cipherBuf []float64) ([]GestureRecord, error) {
+type inspectCandidate struct {
+	engine  *motion.Engine
+	pos     int
+	cost    float64
+	records []GestureRecord
+}
+
+func InspectCipher(keyBuf, cipherBuf []float64, beamWidth int) ([]GestureRecord, error) {
 	if len(keyBuf) < audio.MinLength {
 		return nil, fmt.Errorf("key sample must be at least 1 second long")
 	}
+	if beamWidth < 1 {
+		beamWidth = 1
+	}
 
 	baseLen := int(0.22 * float64(audio.SampleRate))
-	engine := motion.NewEngine(keyBuf, baseLen)
-	pos := 0
-	records := make([]GestureRecord, 0, 256)
+	initialEngine := motion.NewEngine(keyBuf, baseLen)
+	beam := []inspectCandidate{{engine: initialEngine, pos: 0, cost: 0, records: nil}}
+	targetLen := len(cipherBuf)
+	best := beam[0]
 
-	for pos < len(cipherBuf) {
-		bestCost := math.Inf(1)
-		var bestRec GestureRecord
-		var bestEngine *motion.Engine
-
-		for n := 0; n < 16; n++ {
-			candidate := engine.Clone()
-			segment := candidate.SynthesizeEvent(keyBuf, byte(n))
-			length := len(segment)
-			if pos+length > len(cipherBuf) {
+	for step := 0; step < 2048 && len(beam) > 0; step++ {
+		nextBeam := make([]inspectCandidate, 0, len(beam)*16)
+		for _, cand := range beam {
+			if cand.pos == targetLen {
+				if cand.pos > best.pos || (cand.pos == best.pos && cand.cost < best.cost) {
+					best = cand
+				}
 				continue
 			}
 
-			target := cipherBuf[pos : pos+length]
-			cost := decode.DistanceRaw(segment, target)
-			if cost < bestCost {
-				bestCost = cost
-				bestRec = GestureRecord{
-					Index:           len(records),
+			for n := 0; n < 16; n++ {
+				nextEngine := cand.engine.Clone()
+				segment := nextEngine.SynthesizeEvent(keyBuf, byte(n), false)
+				length := len(segment)
+				nextPos := cand.pos + length
+				if nextPos > targetLen {
+					continue
+				}
+
+				target := cipherBuf[cand.pos:nextPos]
+				cost := decode.DistanceRaw(segment, target)
+				records := append(append([]GestureRecord(nil), cand.records...), GestureRecord{
+					Index:           len(cand.records),
 					Nibble:          byte(n),
-					GestureType:     candidate.LastGesture,
+					GestureType:     nextEngine.LastGesture,
 					SegmentLen:      length,
 					Cost:            cost,
-					Intensity:       candidate.LastIntensity,
+					Intensity:       nextEngine.LastIntensity,
 					Duration:        float64(length) / float64(audio.SampleRate),
-					PlatterVelocity: candidate.Physics.PlatterVelocity,
-					StylusDrag:      candidate.Physics.StylusDrag,
-					Crossfader:      candidate.CrossfaderPos,
-				}
-				bestEngine = candidate
+					PlatterVelocity: nextEngine.Physics.PlatterVelocity,
+					StylusDrag:      nextEngine.Physics.StylusDrag,
+					Crossfader:      nextEngine.CrossfaderPos,
+				})
+				nextBeam = append(nextBeam, inspectCandidate{
+					engine:  nextEngine,
+					pos:     nextPos,
+					cost:    cand.cost + cost,
+					records: records,
+				})
 			}
 		}
 
-		if bestEngine == nil {
-			return nil, fmt.Errorf("failed to inspect cipher at position %d", pos)
+		if len(nextBeam) == 0 {
+			break
 		}
 
-		records = append(records, bestRec)
-		engine = bestEngine
-		pos += bestRec.SegmentLen
+		beam = pruneInspectCandidates(nextBeam, beamWidth)
+		for _, cand := range beam {
+			if cand.pos > best.pos || (cand.pos == best.pos && cand.cost < best.cost) {
+				best = cand
+			}
+		}
+		if best.pos == targetLen {
+			return best.records, nil
+		}
 	}
 
-	return records, nil
+	if best.pos == 0 {
+		return nil, fmt.Errorf("failed to inspect cipher: no viable gesture path found")
+	}
+	return best.records, nil
+}
+
+func pruneInspectCandidates(candidates []inspectCandidate, limit int) []inspectCandidate {
+	sort.Slice(candidates, func(i, j int) bool {
+		ti := candidates[i]
+		jj := candidates[j]
+		scoreI := ti.cost / float64(ti.pos+1)
+		scoreJ := jj.cost / float64(jj.pos+1)
+		if scoreI == scoreJ {
+			return ti.pos > jj.pos
+		}
+		return scoreI < scoreJ
+	})
+	if len(candidates) <= limit {
+		return candidates
+	}
+	return candidates[:limit]
 }

@@ -27,7 +27,7 @@ func EncodeParallel(engine *motion.Engine, source []float64, nibbles []byte, seg
 			workerEngine := motion.NewEngine(source, segmentLen)
 			for job := range jobs {
 				workerEngine.Reset()
-				segment := workerEngine.SynthesizeEvent(source, job.nibble)
+				segment := workerEngine.SynthesizeEvent(source, job.nibble, false)
 				copy(outputData[job.index*segmentLen:(job.index+1)*segmentLen], segment)
 			}
 		}()
@@ -65,7 +65,7 @@ func DecodeParallel(keyBuf []float64, cipherBuf []float64, segmentLen int, numWo
 			defer libWg.Done()
 			for job := range libraryJobs {
 				freshEngine := motion.NewEngine(keyBuf, segmentLen)
-				segment := freshEngine.SynthesizeEvent(keyBuf, job.nibble)
+				segment := freshEngine.SynthesizeEvent(keyBuf, job.nibble, false)
 				job.result <- decode.ExtractFeatures(segment)
 			}
 		}()

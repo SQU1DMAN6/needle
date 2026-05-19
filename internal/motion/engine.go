@@ -119,7 +119,7 @@ func (e *Engine) Clone() *Engine {
 }
 
 // SynthesizeEvent generates audio for a variable-length event using seeded gesture policy.
-func (e *Engine) SynthesizeEvent(source []float64, byteVal byte) []float64 {
+func (e *Engine) SynthesizeEvent(source []float64, byteVal byte, final bool) []float64 {
 	eventLen := e.EventLen(byteVal)
 	// Use context-aware seed generation for better security
 	seed := crypto.SeedGenWithContext(
@@ -179,6 +179,16 @@ func (e *Engine) SynthesizeEvent(source []float64, byteVal byte) []float64 {
 			e.CrossfaderPos = targetFader
 		}
 		smoothedGate := smoothGate(gate*e.CrossfaderPos, t)
+		if final {
+			fadeStart := 0.65
+			if t > fadeStart {
+				fade := 1.0 - ((t - fadeStart) / (1.0 - fadeStart))
+				if fade < 0 {
+					fade = 0
+				}
+				smoothedGate *= 0.5 + 0.5*fade
+			}
+		}
 
 		segment[i] = sample * smoothedGate
 		e.State.LastGate = gate
@@ -214,7 +224,7 @@ func (e *Engine) updatePhrase(byteVal byte, eventLen int) {
 
 // SynthesizeSegment is retained for compatibility with older callers.
 func (e *Engine) SynthesizeSegment(source []float64, byteVal byte, position int64) []float64 {
-	return e.SynthesizeEvent(source, byteVal)
+	return e.SynthesizeEvent(source, byteVal, false)
 }
 
 // Reset clears the motion state

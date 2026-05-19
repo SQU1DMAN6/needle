@@ -50,17 +50,17 @@ Usage:
 
 Encode:
   Encode plaintext into cipher audio using a key sample.
-  -key:    path to key sample WAV file (required)
-  -input:  path to plaintext file to encode (required)
-  -output: path to output cipher WAV file (required)
+  -key, -K:    path to key sample WAV file (required)
+  -input, -I:  path to plaintext file to encode (required)
+  -output, -O: path to output cipher WAV file (required)
   -q:      quiet mode (suppress progress output)
   -qq:     verbose mode (show gesture details, physics state)
 
 Decode:
   Decode cipher audio back into plaintext using the original key sample.
-  -key:    path to key sample WAV file (required)
-  -input:  path to cipher WAV file to decode (required)
-  -output: path to output plaintext file (required)
+  -key, -K:    path to key sample WAV file (required)
+  -input, -I:  path to cipher WAV file to decode (required)
+  -output, -O: path to output plaintext file (required)
   -q:      quiet mode
   -qq:     verbose mode
 
@@ -73,8 +73,11 @@ Requirements:
 func handleEncode() {
 	fs := flag.NewFlagSet("encode", flag.ExitOnError)
 	keyFile := fs.String("key", "", "key sample WAV file")
+	keyFileShort := fs.String("K", "", "shorthand for -key")
 	inputFile := fs.String("input", "", "plaintext file to encode")
+	inputFileShort := fs.String("I", "", "shorthand for -input")
 	outputFile := fs.String("output", "", "output cipher WAV file")
+	outputFileShort := fs.String("O", "", "shorthand for -output")
 	threads := fs.Int("threads", runtime.NumCPU(), "number of parallel workers")
 	quiet := fs.Bool("q", false, "quiet mode")
 	verbose := fs.Bool("qq", false, "verbose mode (detailed progress)")
@@ -84,6 +87,16 @@ func handleEncode() {
 	}
 
 	fs.Parse(os.Args[2:])
+
+	if *keyFile == "" {
+		*keyFile = *keyFileShort
+	}
+	if *inputFile == "" {
+		*inputFile = *inputFileShort
+	}
+	if *outputFile == "" {
+		*outputFile = *outputFileShort
+	}
 
 	if *keyFile == "" || *inputFile == "" || *outputFile == "" {
 		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
@@ -111,8 +124,11 @@ func handleEncode() {
 func handleDecode() {
 	fs := flag.NewFlagSet("decode", flag.ExitOnError)
 	keyFile := fs.String("key", "", "key sample WAV file")
+	keyFileShort := fs.String("K", "", "shorthand for -key")
 	inputFile := fs.String("input", "", "cipher WAV file to decode")
+	inputFileShort := fs.String("I", "", "shorthand for -input")
 	outputFile := fs.String("output", "", "output plaintext file")
+	outputFileShort := fs.String("O", "", "shorthand for -output")
 	threads := fs.Int("threads", runtime.NumCPU(), "number of parallel workers")
 	quiet := fs.Bool("q", false, "quiet mode")
 	verbose := fs.Bool("qq", false, "verbose mode (detailed progress)")
@@ -122,6 +138,16 @@ func handleDecode() {
 	}
 
 	fs.Parse(os.Args[2:])
+
+	if *keyFile == "" {
+		*keyFile = *keyFileShort
+	}
+	if *inputFile == "" {
+		*inputFile = *inputFileShort
+	}
+	if *outputFile == "" {
+		*outputFile = *outputFileShort
+	}
 
 	if *keyFile == "" || *inputFile == "" || *outputFile == "" {
 		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
@@ -182,7 +208,7 @@ func encodeFile(keyPath, inPath, outPath string, verbosity int) error {
 	syntheticNibbles.SetVerbosity(verbosity)
 
 	for i, nibble := range nibbles {
-		segment := engine.SynthesizeEvent(keyBuf, nibble)
+		segment := engine.SynthesizeEvent(keyBuf, nibble, i == len(nibbles)-1)
 		if verbosity == cli.VerbosityVerbose {
 			syntheticNibbles.SetGestureInfo(
 				engine.LastGesture,
@@ -272,8 +298,9 @@ type decodeCandidate struct {
 // decodeSequence performs a stateful beam search over variable-length events.
 func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) ([]byte, error) {
 	baseLen := int(0.22 * float64(audio.SampleRate))
+	startEngine := motion.NewEngine(keyBuf, baseLen)
 	start := decodeCandidate{
-		engine:  motion.NewEngine(keyBuf, baseLen),
+		engine:  startEngine,
 		pos:     0,
 		cost:    0,
 		nibbles: []byte{},
@@ -281,6 +308,7 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 
 	beam := []decodeCandidate{start}
 	complete := make([]decodeCandidate, 0)
+	bestPartial := start
 	targetLen := len(cipherBuf)
 	iteration := 0
 
@@ -291,6 +319,7 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 	featureCache := make(map[int]map[int]decode.Features)
 	var fcMutex sync.Mutex
 	var completeMutex sync.Mutex
+	var partialMutex sync.Mutex
 
 	for len(beam) > 0 {
 		// Parallel expansion of beam candidates into nextBeam using worker pool
@@ -306,6 +335,11 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 				completeMutex.Lock()
 				complete = append(complete, c)
 				completeMutex.Unlock()
+				partialMutex.Lock()
+				if c.pos > bestPartial.pos || (c.pos == bestPartial.pos && c.cost < bestPartial.cost) {
+					bestPartial = c
+				}
+				partialMutex.Unlock()
 				return
 			}
 			for n := 0; n < 16; n++ {
@@ -316,7 +350,7 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 					nibbles: append([]byte(nil), c.nibbles...),
 				}
 
-				segment := branch.engine.SynthesizeEvent(keyBuf, byte(n))
+				segment := branch.engine.SynthesizeEvent(keyBuf, byte(n), false)
 				length := len(segment)
 				if branch.pos+length > targetLen {
 					continue
@@ -357,6 +391,11 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 				branch.pos += length
 				branch.nibbles = append(branch.nibbles, byte(n))
 				nextBeamCh <- branch
+				partialMutex.Lock()
+				if branch.pos > bestPartial.pos || (branch.pos == bestPartial.pos && branch.cost < bestPartial.cost) {
+					bestPartial = branch
+				}
+				partialMutex.Unlock()
 			}
 		}
 
@@ -400,7 +439,10 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 	}
 
 	if len(complete) == 0 {
-		return nil, fmt.Errorf("failed to decode cipher: no complete path found")
+		if bestPartial.pos == 0 {
+			return nil, fmt.Errorf("failed to decode cipher: no viable path found")
+		}
+		return bestPartial.nibbles, nil
 	}
 
 	sort.Slice(complete, func(i, j int) bool {

@@ -6,6 +6,20 @@ import (
 	"needle/internal/crypto"
 )
 
+var phraseTransitions = map[int]int{
+	11: 4,
+	4:  7,
+	7:  9,
+	9:  30,
+	30: 15,
+	15: 31,
+	31: 21,
+	21: 8,
+	8:  3,
+	3:  26,
+	26: 10,
+}
+
 // PerformanceContext exposes performance state to gesture policy
 // without creating a circular import dependency.
 type PerformanceContext struct {
@@ -34,16 +48,26 @@ func ComputeGesturePolicy(seed uint64, byteVal byte, baseIntensity float64, ctx 
 	if ctx.PreviousType >= 0 {
 		gestureType = (gestureType + ctx.PreviousType + int(ctx.Energy*3.0) + int(ctx.BeatPhase*2.0)) % 32
 	}
-	intensityVar := rng.NextFloat(0.5, 1.5)
-	durationVar := rng.NextFloat(0.8, 1.2)
 
-	intensity := baseIntensity * intensityVar * (0.85 + 0.25*ctx.Energy)
+	// Sid Wilson-style phrase transitions use the embedded scratch phrase dictionary.
+	if next, ok := phraseTransitions[ctx.PreviousType]; ok {
+		if rng.Next() < 0.45 {
+			gestureType = next
+		}
+	} else if ctx.PreviousType < 0 && rng.Next() < 0.12 {
+		gestureType = 11
+	}
+
+	intensityVar := rng.NextFloat(0.8, 1.4)
+	durationVar := rng.NextFloat(0.85, 1.1)
+
+	intensity := baseIntensity * intensityVar * (0.9 + 0.15*ctx.Energy)
 	if intensity > 1.0 {
 		intensity = 1.0
 	}
 
-	// Increase base amplitude for more energetic scratching
-	base := 0.8 + 0.8*intensity
+	// Increase base amplitude for more aggressive scratch energy.
+	base := 0.9 + 0.8*intensity
 
 	policy := &GesturePolicy{
 		Type:         gestureType,
@@ -54,6 +78,7 @@ func ComputeGesturePolicy(seed uint64, byteVal byte, baseIntensity float64, ctx 
 	// Variety: small random gate modulation to avoid repetition
 	gateModulation := 0.85 + 0.30*rng.Next()
 	policy.GateModulation = gateModulation
+	policy.DurationMult = durationVar
 
 	switch gestureType {
 	case 0: // Forward drag with musical modulation

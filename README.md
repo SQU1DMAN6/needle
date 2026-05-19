@@ -58,6 +58,7 @@ Needle 1.5 Stable is built around **stateful procedural synthesis**:
 - **Scribble**: Complex multi-layer modulation
 - Plus 25 more variants for rich procedural diversity
 - **Increased punch/energy**: base intensity and velocity response were tuned for a more aggressive turntablism style (inspired by Sid Wilson and Craig Jones), while keeping physics realism.
+- **Sidness phrase modeling**: high-Sidness state biases gesture transitions toward aggressive phrase patterns and compact high-energy sequences, preserving musical realism while making gesture behavior harder to guess without the correct key/context.
 
 ### Security Properties
 - **State Mixing**: Gesture selection depends on key + plaintext + position + phrase context + performance state
