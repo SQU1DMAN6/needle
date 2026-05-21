@@ -56,13 +56,13 @@ func NewEngine(keyData []float64, segmentLen int) *Engine {
 func (e *Engine) EventLen(byteVal byte) int {
 	beatSamples := float64(audio.SampleRate) * 60.0 / e.Tempo
 	// Longer subdivisions for more realistic scratching:
-	// 1 beat = ~680ms at 88 BPM, so these produce 300-850ms gestures
-	subdivisions := []float64{0.5, 0.75, 1.0, 1.25, 1.5}
+	// 1 beat = ~680ms at 88 BPM, so these produce mostly 320-420ms gestures.
+	subdivisions := []float64{0.55, 0.65, 0.8, 1.0}
 
 	seed := crypto.SeedGen(e.KeySignature, byteVal, e.SegmentIndex)
 	rng := crypto.NewPRNG(seed)
 	sub := subdivisions[rng.NextInt(len(subdivisions))]
-	drift := (rng.Next() - 0.5) * 0.12 * beatSamples
+	drift := (rng.Next() - 0.5) * 0.08 * beatSamples
 
 	// Phrase-aware timing: favor longer endings at phrase boundaries
 	phraseFactor := 1.0
@@ -70,10 +70,10 @@ func (e *Engine) EventLen(byteVal byte) int {
 		phraseFactor = 1.15
 	}
 
-	// Adjusted for faster events: clamp to 150-400ms
+	// Adjusted for more musical phrase stability: clamp to 320-420ms.
 	length := int(sub*beatSamples*phraseFactor + drift)
-	minLen := int(math.Round(0.15 * float64(audio.SampleRate))) // 150ms minimum
-	maxLen := int(math.Round(0.40 * float64(audio.SampleRate))) // 400ms maximum
+	minLen := int(math.Round(0.32 * float64(audio.SampleRate))) // 320ms minimum
+	maxLen := int(math.Round(0.42 * float64(audio.SampleRate))) // 420ms maximum
 	if length < minLen {
 		length = minLen
 	}
@@ -126,8 +126,15 @@ func (e *Engine) SynthesizeEvent(source []float64, byteVal byte, final bool) []f
 		e.KeySignature, byteVal, e.SegmentIndex,
 		e.BeatPosition, e.PhraseEnergy, e.LastGesture,
 	)
-	// Increased base intensity for more aggressive, Sid Wilson-like style
-	intensity := 0.45 + 0.8*float64(byteVal&0x0f)/15.0
+	// Use the nibble as an accent layer rather than a hard loudness clamp.
+	nibbleAccent := float64(byteVal&0x0f) / 15.0
+	intensity := 0.42 + 0.42*nibbleAccent + 0.12*e.PhraseEnergy
+	if e.BeatPosition < 0.18 || e.BeatPosition > 3.65 {
+		intensity += 0.08
+	}
+	if intensity > 0.96 {
+		intensity = 0.96
+	}
 	context := e.GetPerformanceContext()
 	policy := gesture.ComputeGesturePolicy(seed, byteVal, intensity, context)
 

@@ -121,30 +121,38 @@ func InspectCipher(keyBuf, cipherBuf []float64, beamWidth int) ([]GestureRecord,
 			}
 
 			for n := 0; n < 16; n++ {
-				nextEngine := cand.engine.Clone()
-				segment := nextEngine.SynthesizeEvent(keyBuf, byte(n), false)
-				length := len(segment)
-				nextPos := cand.pos + length
-				if nextPos > targetLen {
+				finalEngine := cand.engine.Clone()
+				finalSegment := finalEngine.SynthesizeEvent(keyBuf, byte(n), false)
+				finalPos := cand.pos + len(finalSegment)
+				final := finalPos == targetLen
+				if final {
+					finalEngine = cand.engine.Clone()
+					finalSegment = finalEngine.SynthesizeEvent(keyBuf, byte(n), true)
+					finalPos = cand.pos + len(finalSegment)
+				}
+				if finalPos > targetLen {
 					continue
 				}
+				segment := finalSegment
+				length := len(segment)
+				nextPos := finalPos
 
 				target := cipherBuf[cand.pos:nextPos]
 				cost := decode.DistanceRaw(segment, target)
 				records := append(append([]GestureRecord(nil), cand.records...), GestureRecord{
 					Index:           len(cand.records),
 					Nibble:          byte(n),
-					GestureType:     nextEngine.LastGesture,
+					GestureType:     finalEngine.LastGesture,
 					SegmentLen:      length,
 					Cost:            cost,
-					Intensity:       nextEngine.LastIntensity,
+					Intensity:       finalEngine.LastIntensity,
 					Duration:        float64(length) / float64(audio.SampleRate),
-					PlatterVelocity: nextEngine.Physics.PlatterVelocity,
-					StylusDrag:      nextEngine.Physics.StylusDrag,
-					Crossfader:      nextEngine.CrossfaderPos,
+					PlatterVelocity: finalEngine.Physics.PlatterVelocity,
+					StylusDrag:      finalEngine.Physics.StylusDrag,
+					Crossfader:      finalEngine.CrossfaderPos,
 				})
 				nextBeam = append(nextBeam, inspectCandidate{
-					engine:  nextEngine,
+					engine:  finalEngine,
 					pos:     nextPos,
 					cost:    cand.cost + cost,
 					records: records,

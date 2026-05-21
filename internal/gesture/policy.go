@@ -50,24 +50,32 @@ func ComputeGesturePolicy(seed uint64, byteVal byte, baseIntensity float64, ctx 
 	}
 
 	// Sid Wilson-style phrase transitions use the embedded scratch phrase dictionary.
+	// Keep generated phrases anchored in playable technique progressions instead of
+	// letting every nibble start from a totally unrelated scratch shape.
 	if next, ok := phraseTransitions[ctx.PreviousType]; ok {
-		if rng.Next() < 0.45 {
+		if rng.Next() < 0.68 {
 			gestureType = next
 		}
-	} else if ctx.PreviousType < 0 && rng.Next() < 0.12 {
-		gestureType = 11
+	} else if ctx.PreviousType < 0 {
+		startRoll := rng.Next()
+		if startRoll < 0.62 {
+			gestureType = 11
+		} else if startRoll < 0.78 {
+			gestureType = 2
+		}
 	}
 
-	intensityVar := rng.NextFloat(0.8, 1.4)
+	intensityVar := rng.NextFloat(0.82, 1.18)
 	durationVar := rng.NextFloat(0.85, 1.1)
 
-	intensity := baseIntensity * intensityVar * (0.9 + 0.15*ctx.Energy)
+	intensity := baseIntensity * intensityVar * (0.86 + 0.12*ctx.Energy)
 	if intensity > 1.0 {
 		intensity = 1.0
 	}
 
-	// Increase base amplitude for more aggressive scratch energy.
-	base := 0.9 + 0.8*intensity
+	// Keep platter motion energetic without pinning every high nibble to maximum
+	// velocity; real scratch phrases breathe between accents.
+	base := 0.72 + 0.62*intensity
 
 	policy := &GesturePolicy{
 		Type:         gestureType,
