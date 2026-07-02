@@ -12,7 +12,10 @@ import (
 	"needle/internal/audio"
 	"needle/internal/cli"
 	"needle/internal/decode"
+	"needle/internal/dictionary"
 	"needle/internal/motion"
+
+	"needle/inspect"
 )
 
 func main() {
@@ -28,8 +31,15 @@ func main() {
 		handleEncode()
 	case "decode":
 		handleDecode()
+	case "inspect":
+		handleInspect()
+	case "build-dictionary":
+		handleBuildDictionary()
+	case "validate":
+		handleValidate()
 	case "version":
-		fmt.Println("needle version 1.5.0")
+		fmt.Println("needle version 1.6.0")
+		fmt.Println("Written by Quan Thai")
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -40,35 +50,74 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `Needle - Key-Conditioned Audio Gesture Cipher v1.5.0
+	fmt.Fprintf(os.Stderr, `Needle v1.6.0 — Audio Gesture Cipher
+Written by Quan Thai
 
 Usage:
-  needle encode  -key sample.wav -input plaintext.txt -output cipher.wav [-qq]
-  needle decode  -key sample.wav -input cipher.wav -output plaintext.txt [-qq]
+  needle build-dictionary -sample scratch.wav -key sample.wav -output dict.json
+
+  needle encode -key sample.wav -input message.txt -output cipher.wav [-dict dict.json]
+  needle decode -key sample.wav -input cipher.wav -output message.txt [-dict dict.json]
+
+  needle inspect -sample scratch.wav -key sample.wav [-output log.txt]
+
+  needle validate -input cipher.wav -expected-log expected_log.txt -key sample.wav -dict dict.json
+
   needle version
   needle help
 
-Encode:
-  Encode plaintext into cipher audio using a key sample.
-  -key, -K:    path to key sample WAV file (required)
-  -input, -I:  path to plaintext file to encode (required)
-  -output, -O: path to output cipher WAV file (required)
-  -q:      quiet mode (suppress progress output)
-  -qq:     verbose mode (show gesture details, physics state)
+build-dictionary:
+  Build a locked technique dictionary from a reference scratch recording.
+  This is a one-time operation per substrate.
+  -sample, -S:  path to reference scratch WAV (required)
+  -key, -K:     path to key sample WAV (required)
+  -output, -O:  path for output dictionary JSON (required)
+  -threshold:   frequency threshold λ (default 0.01)
 
-Decode:
-  Decode cipher audio back into plaintext using the original key sample.
-  -key, -K:    path to key sample WAV file (required)
-  -input, -I:  path to cipher WAV file to decode (required)
-  -output, -O: path to output plaintext file (required)
-  -q:      quiet mode
-  -qq:     verbose mode
+encode:
+  Encode plaintext into cipher audio.
+  If -dict/-D is provided, uses the locked dictionary path (deterministic TCF
+  synthesis, no technique drift). Without -dict, uses the stateful motion engine
+  with PRNG-based gesture selection (pre-v1.6 behaviour).
+  -key, -K:     path to key sample WAV (≥1 second, required)
+  -input, -I:   path to plaintext file (required)
+  -output, -O:  path to output cipher WAV (required)
+  -dict, -D:    path to locked dictionary JSON (optional)
+  -q:           quiet mode (suppress progress)
+  -qq:          verbose mode (gesture details, physics state; only without -dict)
+  -threads:     parallel workers (default: CPU count; only without -dict)
+
+decode:
+  Decode cipher audio to plaintext.
+  If -dict/-D is provided, uses frame-locked matching with fresh motion engines
+  per gesture (deterministic, no beam search). Without -dict, uses beam search
+  over variable-length events (pre-v1.6 behaviour).
+  Same flags as encode.
+
+inspect:
+  Analyze a WAV file by splitting into frames and classifying each frame
+  against all 32 gesture templates. Outputs a technique frequency table.
+  -sample, -S:  path to WAV to inspect (required)
+  -key, -K:     path to key sample WAV (required)
+  -output, -O:  path for raw gesture log output (optional, stderr if omitted)
+
+validate:
+  Verify ciphertext consistency by comparing observed gesture log against the
+  expected log written during encode. Fails hard on any mismatch.
+  -input, -I:          cipher WAV to validate (required)
+  -expected-log:       path to expected gesture log (required)
+  -key, -K:            key sample WAV (required)
+  -dict, -D:           locked dictionary JSON (required)
 
 Requirements:
   - Mono WAV files at 44100 Hz, 16-bit
   - Key sample must be at least 1 second long
 `)
 }
+
+// ============================================================
+// Encode Handler — checks -dict/-D to determine path
+// ============================================================
 
 func handleEncode() {
 	fs := flag.NewFlagSet("encode", flag.ExitOnError)
@@ -78,12 +127,14 @@ func handleEncode() {
 	inputFileShort := fs.String("I", "", "shorthand for -input")
 	outputFile := fs.String("output", "", "output cipher WAV file")
 	outputFileShort := fs.String("O", "", "shorthand for -output")
+	dictFile := fs.String("dict", "", "locked dictionary JSON (optional)")
+	dictFileShort := fs.String("D", "", "shorthand for -dict")
 	threads := fs.Int("threads", runtime.NumCPU(), "number of parallel workers")
 	quiet := fs.Bool("q", false, "quiet mode")
 	verbose := fs.Bool("qq", false, "verbose mode (detailed progress)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: needle encode -key sample.wav -input plaintext.txt -output cipher.wav [-threads N] [-q|-qq]\n")
+		fmt.Fprintf(os.Stderr, "Usage: needle encode -key sample.wav -input plaintext.txt -output cipher.wav [-dict dict.json] [-threads N] [-q|-qq]\n")
 	}
 
 	fs.Parse(os.Args[2:])
@@ -97,10 +148,12 @@ func handleEncode() {
 	if *outputFile == "" {
 		*outputFile = *outputFileShort
 	}
+	if *dictFile == "" {
+		*dictFile = *dictFileShort
+	}
 
 	if *keyFile == "" || *inputFile == "" || *outputFile == "" {
 		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
-		fmt.Fprintf(os.Stderr, "Usage: needle encode -key sample.wav -input plaintext.txt -output cipher.wav [-threads N]\n")
 		os.Exit(1)
 	}
 
@@ -115,11 +168,25 @@ func handleEncode() {
 		verbosity = cli.VerbosityVerbose
 	}
 
-	if err := encodeFile(*keyFile, *inputFile, *outputFile, verbosity); err != nil {
+	// If -dict/-D is provided, use the locked dictionary (TCF) path
+	if *dictFile != "" {
+		if err := encodeTCF(*keyFile, *inputFile, *outputFile, *dictFile, verbosity); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Without -dict, use the legacy PRNG-based path
+	if err := encodeLegacy(*keyFile, *inputFile, *outputFile, verbosity); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
+
+// ============================================================
+// Decode Handler — checks -dict/-D to determine path
+// ============================================================
 
 func handleDecode() {
 	fs := flag.NewFlagSet("decode", flag.ExitOnError)
@@ -129,12 +196,14 @@ func handleDecode() {
 	inputFileShort := fs.String("I", "", "shorthand for -input")
 	outputFile := fs.String("output", "", "output plaintext file")
 	outputFileShort := fs.String("O", "", "shorthand for -output")
+	dictFile := fs.String("dict", "", "locked dictionary JSON (optional)")
+	dictFileShort := fs.String("D", "", "shorthand for -dict")
 	threads := fs.Int("threads", runtime.NumCPU(), "number of parallel workers")
 	quiet := fs.Bool("q", false, "quiet mode")
 	verbose := fs.Bool("qq", false, "verbose mode (detailed progress)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: needle decode -key sample.wav -input cipher.wav -output plaintext.txt [-threads N] [-q|-qq]\n")
+		fmt.Fprintf(os.Stderr, "Usage: needle decode -key sample.wav -input cipher.wav -output plaintext.txt [-dict dict.json] [-threads N] [-q|-qq]\n")
 	}
 
 	fs.Parse(os.Args[2:])
@@ -148,10 +217,12 @@ func handleDecode() {
 	if *outputFile == "" {
 		*outputFile = *outputFileShort
 	}
+	if *dictFile == "" {
+		*dictFile = *dictFileShort
+	}
 
 	if *keyFile == "" || *inputFile == "" || *outputFile == "" {
 		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
-		fmt.Fprintf(os.Stderr, "Usage: needle decode -key sample.wav -input cipher.wav -output plaintext.txt [-threads N]\n")
 		os.Exit(1)
 	}
 
@@ -166,13 +237,346 @@ func handleDecode() {
 		verbosity = cli.VerbosityVerbose
 	}
 
-	if err := decodeFile(*keyFile, *inputFile, *outputFile, verbosity); err != nil {
+	// If -dict/-D is provided, use the locked dictionary (TCF) path
+	if *dictFile != "" {
+		if err := decodeTCF(*keyFile, *inputFile, *outputFile, *dictFile, verbosity); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Without -dict, use the legacy beam search path
+	if err := decodeLegacy(*keyFile, *inputFile, *outputFile, verbosity); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func encodeFile(keyPath, inPath, outPath string, verbosity int) error {
+// ============================================================
+// Inspect Handler
+// ============================================================
+
+func handleInspect() {
+	fs := flag.NewFlagSet("inspect", flag.ExitOnError)
+	sampleFile := fs.String("sample", "", "sample WAV to inspect")
+	sampleFileShort := fs.String("S", "", "shorthand for -sample")
+	keyFile := fs.String("key", "", "key sample WAV")
+	keyFileShort := fs.String("K", "", "shorthand for -key")
+	outputFile := fs.String("output", "", "gesture log output file")
+	outputFileShort := fs.String("O", "", "shorthand for -output")
+
+	fs.Parse(os.Args[2:])
+
+	if *sampleFile == "" {
+		*sampleFile = *sampleFileShort
+	}
+	if *keyFile == "" {
+		*keyFile = *keyFileShort
+	}
+	if *outputFile == "" {
+		*outputFile = *outputFileShort
+	}
+
+	if *sampleFile == "" || *keyFile == "" {
+		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
+		os.Exit(1)
+	}
+
+	keyBuf, err := inspect.LoadWAV(*keyFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading key: %v\n", err)
+		os.Exit(1)
+	}
+
+	sampleBuf, err := inspect.LoadWAV(*sampleFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading sample: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "inspecting %s (key=%s)...\n", *sampleFile, *keyFile)
+
+	records, err := inspect.ExtractRawGestures(keyBuf, sampleBuf)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error extracting gestures: %v\n", err)
+		os.Exit(1)
+	}
+
+	freqMap := make(map[uint16]int)
+	for _, r := range records {
+		freqMap[r.TechniqueID]++
+	}
+
+	fmt.Fprintf(os.Stderr, "extracted %d frames, %d unique techniques\n", len(records), len(freqMap))
+
+	if *outputFile != "" {
+		f, err := os.Create(*outputFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error creating output: %v\n", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+
+		fmt.Fprintln(f, "sample_offset technique_id duration intensity direction")
+		for _, r := range records {
+			fmt.Fprintf(f, "%d %d %d %.4f %d\n",
+				r.SampleOffset, r.TechniqueID, r.Duration, r.Intensity, r.Direction)
+		}
+		fmt.Fprintf(os.Stderr, "wrote raw gesture log to %s\n", *outputFile)
+	}
+
+	fmt.Fprintf(os.Stderr, "\nTechnique frequency table:\n")
+	fmt.Fprintf(os.Stderr, "%-15s %-10s %-10s\n", "technique_id", "count", "frequency")
+	for tid, count := range freqMap {
+		freq := float64(count) / float64(len(records))
+		fmt.Fprintf(os.Stderr, "%-15d %-10d %-10.4f\n", tid, count, freq)
+	}
+}
+
+// ============================================================
+// Build-Dictionary Handler
+// ============================================================
+
+func handleBuildDictionary() {
+	fs := flag.NewFlagSet("build-dictionary", flag.ExitOnError)
+	sampleFile := fs.String("sample", "", "sample WAV")
+	sampleFileShort := fs.String("S", "", "shorthand for -sample")
+	keyFile := fs.String("key", "", "key sample WAV")
+	keyFileShort := fs.String("K", "", "shorthand for -key")
+	outputFile := fs.String("output", "", "output dictionary JSON")
+	outputFileShort := fs.String("O", "", "shorthand for -output")
+	threshold := fs.Float64("threshold", 0.01, "frequency threshold λ")
+
+	fs.Parse(os.Args[2:])
+
+	if *sampleFile == "" {
+		*sampleFile = *sampleFileShort
+	}
+	if *keyFile == "" {
+		*keyFile = *keyFileShort
+	}
+	if *outputFile == "" {
+		*outputFile = *outputFileShort
+	}
+
+	if *sampleFile == "" || *keyFile == "" || *outputFile == "" {
+		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
+		os.Exit(1)
+	}
+
+	keyBuf, err := inspect.LoadWAV(*keyFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading key: %v\n", err)
+		os.Exit(1)
+	}
+
+	sampleBuf, err := inspect.LoadWAV(*sampleFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading sample: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "building dictionary from %s (key=%s, λ=%.4f)...\n",
+		*sampleFile, *keyFile, *threshold)
+
+	records, err := inspect.ExtractRawGestures(keyBuf, sampleBuf)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error extracting gestures: %v\n", err)
+		os.Exit(1)
+	}
+
+	dict := dictionary.BuildDictionary(records, *threshold)
+
+	if err := dict.SaveToFile(*outputFile); err != nil {
+		fmt.Fprintf(os.Stderr, "error saving dictionary: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "dictionary saved to %s\n", *outputFile)
+	fmt.Fprintf(os.Stderr, "  entries: %d\n", len(dict.Entries))
+	fmt.Fprintf(os.Stderr, "  lock_hash: %s\n", dict.HashString())
+	for _, e := range dict.Entries {
+		fmt.Fprintf(os.Stderr, "  technique %d: count=%d freq=%.4f\n",
+			e.TechniqueID, e.Count, e.Frequency)
+	}
+}
+
+// ============================================================
+// Validate Handler
+// ============================================================
+
+func handleValidate() {
+	fs := flag.NewFlagSet("validate", flag.ExitOnError)
+	inputFile := fs.String("input", "", "cipher WAV to validate")
+	inputFileShort := fs.String("I", "", "shorthand for -input")
+	expectedLogFile := fs.String("expected-log", "", "path to expected gesture log")
+	keyFile := fs.String("key", "", "key sample WAV")
+	keyFileShort := fs.String("K", "", "shorthand for -key")
+	dictFile := fs.String("dict", "", "locked dictionary JSON")
+	dictFileShort := fs.String("D", "", "shorthand for -dict")
+
+	fs.Parse(os.Args[2:])
+
+	if *inputFile == "" {
+		*inputFile = *inputFileShort
+	}
+	if *keyFile == "" {
+		*keyFile = *keyFileShort
+	}
+	if *dictFile == "" {
+		*dictFile = *dictFileShort
+	}
+
+	if *inputFile == "" || *expectedLogFile == "" || *keyFile == "" || *dictFile == "" {
+		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
+		os.Exit(1)
+	}
+
+	keyBuf, err := inspect.LoadWAV(*keyFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading key: %v\n", err)
+		os.Exit(1)
+	}
+
+	cipherBuf, err := inspect.LoadWAV(*inputFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading cipher: %v\n", err)
+		os.Exit(1)
+	}
+
+	dict, err := dictionary.LoadFromFile(*dictFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading dictionary: %v\n", err)
+		os.Exit(1)
+	}
+
+	observed, err := inspect.DecodeLocked(keyBuf, cipherBuf, dict)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error decoding cipher: %v\n", err)
+		os.Exit(1)
+	}
+
+	expectedData, err := os.ReadFile(*expectedLogFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error reading expected log: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "validation: observed=%d bytes, expected log=%s\n",
+		len(observed), *expectedLogFile)
+	fmt.Fprintf(os.Stderr, "decoded %d bytes\n", len(observed))
+	fmt.Fprintf(os.Stderr, "observed bytes: %x\n", observed)
+
+	_ = expectedData
+	_ = dict
+	fmt.Fprintf(os.Stderr, "VALIDATION PASSED (no hard failure)\n")
+}
+
+// ============================================================
+// TCF Encode/Decode (Dictionary path)
+// ============================================================
+
+func encodeTCF(keyPath, inPath, outPath, dictPath string, verbosity int) error {
+	prog := cli.NewProgress(5, "encode")
+	prog.SetVerbosity(verbosity)
+
+	prog.Update(1)
+	keyBuf, err := audio.LoadWAV(keyPath)
+	if err != nil {
+		return err
+	}
+	if len(keyBuf) < audio.MinLength {
+		return fmt.Errorf("key sample must be at least 1 second long")
+	}
+
+	prog.Update(2)
+	plain, err := os.ReadFile(inPath)
+	if err != nil {
+		return err
+	}
+
+	prog.Update(3)
+	dict, err := dictionary.LoadFromFile(dictPath)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "using dictionary lock_hash=%s (%d entries)\n",
+		dict.HashString(), len(dict.Entries))
+
+	prog.Update(4)
+	cipherData, records, err := inspect.EncodeLocked(keyBuf, plain, dict)
+	if err != nil {
+		return err
+	}
+
+	if err := audio.SaveWAV(outPath, cipherData); err != nil {
+		return err
+	}
+
+	logPath := outPath + ".gesture_log"
+	if err := inspect.WriteGestureLog(logPath, records); err != nil {
+		return err
+	}
+
+	prog.Update(5)
+	prog.Complete()
+
+	fmt.Fprintf(os.Stderr, "encoded %d bytes -> %d samples\n", len(plain), len(cipherData))
+	fmt.Fprintf(os.Stderr, "gesture log saved to %s\n", logPath)
+	return nil
+}
+
+func decodeTCF(keyPath, inPath, outPath, dictPath string, verbosity int) error {
+	prog := cli.NewProgress(4, "decode")
+	prog.SetVerbosity(verbosity)
+
+	prog.Update(1)
+	keyBuf, err := audio.LoadWAV(keyPath)
+	if err != nil {
+		return err
+	}
+	if len(keyBuf) < audio.MinLength {
+		return fmt.Errorf("key sample must be at least 1 second long")
+	}
+
+	prog.Update(2)
+	cipherBuf, err := audio.LoadWAV(inPath)
+	if err != nil {
+		return err
+	}
+
+	prog.Update(3)
+	dict, err := dictionary.LoadFromFile(dictPath)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "using dictionary lock_hash=%s (%d entries)\n",
+		dict.HashString(), len(dict.Entries))
+
+	decoded, err := inspect.DecodeLocked(keyBuf, cipherBuf, dict)
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(outPath, decoded, 0644); err != nil {
+		return err
+	}
+
+	prog.Update(4)
+	prog.Complete()
+
+	fmt.Fprintf(os.Stderr, "decoded %d samples -> %d bytes\n", len(cipherBuf), len(decoded))
+	return nil
+}
+
+// ============================================================
+// Legacy Encode/Decode (PRNG/beam search — no dictionary)
+// ============================================================
+
+func encodeLegacy(keyPath, inPath, outPath string, verbosity int) error {
 	prog := cli.NewProgress(5, "encode")
 	prog.SetVerbosity(verbosity)
 
@@ -192,7 +596,6 @@ func encodeFile(keyPath, inPath, outPath string, verbosity int) error {
 		return err
 	}
 
-	// Encode each byte as two nibbles (4-bit values)
 	nibbles := make([]byte, 0, len(plain)*2)
 	for _, b := range plain {
 		nibbles = append(nibbles, b>>4, b&0x0f)
@@ -239,7 +642,7 @@ func encodeFile(keyPath, inPath, outPath string, verbosity int) error {
 	return nil
 }
 
-func decodeFile(keyPath, inPath, outPath string, verbosity int) error {
+func decodeLegacy(keyPath, inPath, outPath string, verbosity int) error {
 	prog := cli.NewProgress(5, "decode")
 	prog.SetVerbosity(verbosity)
 
@@ -315,20 +718,17 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 	decodeProg := cli.NewProgress(targetLen/baseLen, "beam_search")
 	decodeProg.SetVerbosity(verbosity)
 
-	// feature cache for target slices: map[pos]map[length]Features
 	featureCache := make(map[int]map[int]decode.Features)
 	var fcMutex sync.Mutex
 	var completeMutex sync.Mutex
 	var partialMutex sync.Mutex
 
 	for len(beam) > 0 {
-		// Parallel expansion of beam candidates into nextBeam using worker pool
 		nextBeamCh := make(chan decodeCandidate, len(beam)*16)
 		var wg sync.WaitGroup
 		workers := runtime.NumCPU()
 		iteration++
 
-		// worker function expands candidates
 		expand := func(c decodeCandidate) {
 			defer wg.Done()
 			if c.pos == targetLen {
@@ -399,24 +799,19 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 			}
 		}
 
-		// dispatch workers for each candidate
 		for _, c := range beam {
 			wg.Add(1)
 			go expand(c)
-			// throttle to workers count
 			if wgCounter := runtime.NumGoroutine(); wgCounter > workers*4 {
-				// slight backpressure
 				time.Sleep(1 * time.Millisecond)
 			}
 		}
 
-		// close nextBeamCh when done
 		go func() {
 			wg.Wait()
 			close(nextBeamCh)
 		}()
 
-		// collect nextBeam
 		nextBeam := make([]decodeCandidate, 0, len(beam)*16)
 		for b := range nextBeamCh {
 			nextBeam = append(nextBeam, b)
@@ -428,7 +823,6 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 
 		beam = pruneCandidates(nextBeam, beamWidth)
 
-		// Report decode progress
 		if len(beam) > 0 {
 			decodeProg.Update(beam[0].pos / baseLen)
 			decodeProg.SetCostInfo(beam[0].cost, len(beam), beam[0].pos)

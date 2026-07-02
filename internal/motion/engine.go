@@ -120,7 +120,6 @@ func (e *Engine) Clone() *Engine {
 
 // SynthesizeEvent generates audio for a variable-length event using seeded gesture policy.
 func (e *Engine) SynthesizeEvent(source []float64, byteVal byte, final bool) []float64 {
-	eventLen := e.EventLen(byteVal)
 	// Use context-aware seed generation for better security
 	seed := crypto.SeedGenWithContext(
 		e.KeySignature, byteVal, e.SegmentIndex,
@@ -137,6 +136,89 @@ func (e *Engine) SynthesizeEvent(source []float64, byteVal byte, final bool) []f
 	}
 	context := e.GetPerformanceContext()
 	policy := gesture.ComputeGesturePolicy(seed, byteVal, intensity, context)
+
+	return e.synthesizeWithPolicy(source, byteVal, policy, final)
+}
+
+// SynthesizeEventWithTechnique generates audio for a fixed technique ID (from dictionary).
+// This is the deterministic path: technique comes from the locked dictionary, not PRNG.
+// Uses the same physics engine as the legacy path for realistic audio.
+func (e *Engine) SynthesizeEventWithTechnique(source []float64, byteVal byte, techniqueID int, final bool) []float64 {
+	nibbleAccent := float64(byteVal&0x0f) / 15.0
+	intensity := 0.42 + 0.42*nibbleAccent + 0.12*e.PhraseEnergy
+	if e.BeatPosition < 0.18 || e.BeatPosition > 3.65 {
+		intensity += 0.08
+	}
+	if intensity > 0.96 {
+		intensity = 0.96
+	}
+
+	// Compute event length deterministically from byte value and engine state
+	// (EventLen uses PRNG, so we use a deterministic approximation)
+	eventLen := e.deterministicEventLen(byteVal)
+
+	// Build a policy with the fixed technique ID — no PRNG, no context-based selection
+	policy := &gesture.GesturePolicy{
+		Type:         techniqueID,
+		Intensity:    intensity,
+		DurationMult: 1.0,
+	}
+
+	// Use the canonical curve templates directly
+	tmpl := gesture.Templates[techniqueID]
+	if tmpl != nil {
+		policy.VelocityCurve = tmpl.VelocityCurve
+		policy.GatingCurve = tmpl.GatingCurve
+	} else {
+		// Fallback to technique 0
+		tmpl0 := gesture.Templates[0]
+		if tmpl0 != nil {
+			policy.VelocityCurve = tmpl0.VelocityCurve
+			policy.GatingCurve = tmpl0.GatingCurve
+		} else {
+			policy.VelocityCurve = func(t, i float64) float64 { return 0.8 }
+			policy.GatingCurve = func(t, i float64) float64 { return 1.0 }
+		}
+	}
+
+	policy.GateModulation = 1.0
+
+	return e.synthesizeWithPolicyExplicit(source, byteVal, policy, eventLen, final)
+}
+
+// deterministicEventLen computes event length without PRNG.
+// Uses the nibble value and engine state to determine duration deterministically.
+func (e *Engine) deterministicEventLen(byteVal byte) int {
+	beatSamples := float64(audio.SampleRate) * 60.0 / e.Tempo
+	nibble := float64(byteVal&0x0f) / 15.0
+	// Map nibble value to subdivision: 0.55-1.0 range
+	sub := 0.55 + 0.45*nibble
+	phraseFactor := 1.0
+	if e.BeatPosition > 3.0 {
+		phraseFactor = 1.15
+	}
+	length := int(sub * beatSamples * phraseFactor)
+	minLen := int(math.Round(0.32 * float64(audio.SampleRate)))
+	maxLen := int(math.Round(0.42 * float64(audio.SampleRate)))
+	if length < minLen {
+		length = minLen
+	}
+	if length > maxLen {
+		length = maxLen
+	}
+	return length
+}
+
+// synthesizeWithPolicy is the shared synthesis core used by the legacy path.
+// It contains all the physics, pitch shifting, crossfader, and gate logic that produces
+// realistic scratching audio.
+func (e *Engine) synthesizeWithPolicy(source []float64, byteVal byte, policy *gesture.GesturePolicy, final bool) []float64 {
+	eventLen := e.EventLen(byteVal)
+	return e.synthesizeWithPolicyExplicit(source, byteVal, policy, eventLen, final)
+}
+
+// synthesizeWithPolicyExplicit is the shared synthesis core with explicit event length.
+func (e *Engine) synthesizeWithPolicyExplicit(source []float64, byteVal byte, policy *gesture.GesturePolicy, eventLen int, final bool) []float64 {
 
 	// reuse per-engine buffer to reduce allocations
 	if cap(e.SegmentBuf) < eventLen {

@@ -7,7 +7,10 @@ import (
 
 	"needle/internal/audio"
 	"needle/internal/decode"
+	"needle/internal/dictionary"
+	"needle/internal/gesture"
 	"needle/internal/motion"
+	"needle/internal/tcf"
 )
 
 type GestureRecord struct {
@@ -54,6 +57,7 @@ func WriteGestureLog(path string, records []GestureRecord) error {
 	return nil
 }
 
+// EncodePlaintext uses the legacy motion engine (stateful, PRNG-based).
 func EncodePlaintext(keyBuf []float64, plain []byte) ([]float64, []GestureRecord, error) {
 	if len(keyBuf) < audio.MinLength {
 		return nil, nil, fmt.Errorf("key sample must be at least 1 second long")
@@ -76,6 +80,49 @@ func EncodePlaintext(keyBuf []float64, plain []byte) ([]float64, []GestureRecord
 			Index:           i,
 			Nibble:          nibble,
 			GestureType:     engine.LastGesture,
+			SegmentLen:      len(segment),
+			Cost:            0.0,
+			Intensity:       engine.LastIntensity,
+			Duration:        float64(len(segment)) / float64(audio.SampleRate),
+			PlatterVelocity: engine.Physics.PlatterVelocity,
+			StylusDrag:      engine.Physics.StylusDrag,
+			Crossfader:      engine.CrossfaderPos,
+		})
+	}
+
+	return output, records, nil
+}
+
+// EncodeLocked uses a locked dictionary for deterministic encoding.
+// Uses a fresh motion engine per gesture for stateless synthesis.
+// This ensures decode can reproduce identical audio for each technique ID.
+func EncodeLocked(keyBuf []float64, plain []byte, dict *dictionary.Dictionary) ([]float64, []GestureRecord, error) {
+	if len(keyBuf) < audio.MinLength {
+		return nil, nil, fmt.Errorf("key sample must be at least 1 second long")
+	}
+
+	nibbles := make([]byte, 0, len(plain)*2)
+	for _, b := range plain {
+		nibbles = append(nibbles, b>>4, b&0x0f)
+	}
+
+	baseLen := int(0.22 * float64(audio.SampleRate))
+	output := make([]float64, 0, len(nibbles)*baseLen)
+	records := make([]GestureRecord, 0, len(nibbles))
+
+	for i, nibble := range nibbles {
+		canonicalTCF := dict.LookupByte(nibble)
+		techniqueID := int(canonicalTCF.TechniqueID)
+
+		// Fresh engine per gesture — stateless, deterministic
+		engine := motion.NewEngine(keyBuf, baseLen)
+		segment := engine.SynthesizeEventWithTechnique(keyBuf, nibble, techniqueID, i == len(nibbles)-1)
+
+		output = append(output, segment...)
+		records = append(records, GestureRecord{
+			Index:           i,
+			Nibble:          nibble,
+			GestureType:     techniqueID,
 			SegmentLen:      len(segment),
 			Cost:            0.0,
 			Intensity:       engine.LastIntensity,
@@ -196,4 +243,151 @@ func pruneInspectCandidates(candidates []inspectCandidate, limit int) []inspectC
 		return candidates
 	}
 	return candidates[:limit]
+}
+
+// ============================================================
+// Frame-Locked Extraction
+// ============================================================
+
+// ExtractRawGestures performs frame-locked gesture extraction from audio.
+// Uses fixed 11025-sample frames (~250ms) to match gesture duration.
+// Returns a list of RawGestureRecord suitable for dictionary construction.
+func ExtractRawGestures(keyBuf, sampleBuf []float64) ([]dictionary.RawGestureRecord, error) {
+	if len(keyBuf) < audio.MinLength {
+		return nil, fmt.Errorf("key sample must be at least 1 second long")
+	}
+
+	frames := tcf.SplitFrames(sampleBuf)
+	records := make([]dictionary.RawGestureRecord, 0, len(frames))
+	baseLen := int(0.22 * float64(audio.SampleRate))
+
+	for _, frame := range frames {
+		bestID := uint16(0)
+		bestCost := -1.0
+
+		for tid := 0; tid < 32; tid++ {
+			tmpl := gesture.Templates[tid]
+			if tmpl == nil {
+				continue
+			}
+
+			// Synthesize a reference using the motion engine with this technique
+			refEngine := motion.NewEngine(keyBuf, baseLen)
+			refSegment := refEngine.SynthesizeEventWithTechnique(keyBuf, 0, tid, false)
+
+			// Ensure length matches by truncating or padding
+			if len(refSegment) > len(frame.Data) {
+				refSegment = refSegment[:len(frame.Data)]
+			} else if len(refSegment) < len(frame.Data) {
+				// Pad with zeros
+				padded := make([]float64, len(frame.Data))
+				copy(padded, refSegment)
+				refSegment = padded
+			}
+
+			cost := decode.DistanceRaw(refSegment, frame.Data)
+			if bestCost < 0 || cost < bestCost {
+				bestCost = cost
+				bestID = uint16(tid)
+			}
+		}
+
+		records = append(records, dictionary.RawGestureRecord{
+			SampleOffset: frame.StartSample,
+			TechniqueID:  bestID,
+			Duration:     int64(len(frame.Data)),
+			Intensity:    0.6,
+			Direction:    0,
+		})
+	}
+
+	return records, nil
+}
+
+// ============================================================
+// DecodeLocked — decodes cipher audio using a locked dictionary.
+// Uses motion engine for reference synthesis (realistic audio).
+// ============================================================
+
+// DecodeLocked decodes ciphertext audio using a locked dictionary.
+// Uses fresh motion engines per gesture for matching — identical to EncodeLocked.
+func DecodeLocked(keyBuf, cipherBuf []float64, dict *dictionary.Dictionary) ([]byte, error) {
+	if len(keyBuf) < audio.MinLength {
+		return nil, fmt.Errorf("key sample must be at least 1 second long")
+	}
+
+	baseLen := int(0.22 * float64(audio.SampleRate))
+	cipherLen := len(cipherBuf)
+	matchedNibbles := make([]byte, 0)
+	pos := 0
+
+	for pos < cipherLen {
+		bestNibble := byte(0)
+		bestCost := -1.0
+
+		for n := 0; n < 16; n++ {
+			refTCF := dict.LookupByte(byte(n))
+			techniqueID := int(refTCF.TechniqueID)
+
+			// Fresh engine per candidate — same as EncodeLocked
+			refEngine := motion.NewEngine(keyBuf, baseLen)
+			refSegment := refEngine.SynthesizeEventWithTechnique(keyBuf, byte(n), techniqueID, false)
+
+			// Compare against the cipher at current position
+			endPos := pos + len(refSegment)
+			if endPos > cipherLen {
+				endPos = cipherLen
+			}
+			target := cipherBuf[pos:endPos]
+
+			cost := decode.DistanceRaw(refSegment[:len(target)], target)
+			if bestCost < 0 || cost < bestCost {
+				bestCost = cost
+				bestNibble = byte(n)
+			}
+		}
+
+		matchedNibbles = append(matchedNibbles, bestNibble)
+
+		// Advance by the length of the best-matching reference
+		refTCF := dict.LookupByte(bestNibble)
+		refEngine := motion.NewEngine(keyBuf, baseLen)
+		refSegment := refEngine.SynthesizeEventWithTechnique(keyBuf, bestNibble, int(refTCF.TechniqueID), false)
+		pos += len(refSegment)
+	}
+
+	// Convert nibbles to bytes
+	decoded := make([]byte, (len(matchedNibbles)+1)/2)
+	for i := 0; i < len(matchedNibbles); i += 2 {
+		high := matchedNibbles[i] & 0x0f
+		low := byte(0)
+		if i+1 < len(matchedNibbles) {
+			low = matchedNibbles[i+1] & 0x0f
+		}
+		decoded[i/2] = (high << 4) | low
+	}
+
+	return decoded, nil
+}
+
+// ValidateCipher checks that observed gesture log matches expected log.
+// Fails hard on any mismatch (spec §8).
+func ValidateCipher(observed, expected []GestureRecord) error {
+	if len(observed) != len(expected) {
+		return fmt.Errorf("GESTURE MISMATCH: observed %d gestures, expected %d",
+			len(observed), len(expected))
+	}
+
+	for i := range observed {
+		if observed[i].GestureType != expected[i].GestureType ||
+			observed[i].Nibble != expected[i].Nibble {
+			return fmt.Errorf(
+				"GESTURE MISMATCH at index %d: observed {nibble=%d gesture=%d}, expected {nibble=%d gesture=%d}",
+				i, observed[i].Nibble, observed[i].GestureType,
+				expected[i].Nibble, expected[i].GestureType,
+			)
+		}
+	}
+
+	return nil
 }
