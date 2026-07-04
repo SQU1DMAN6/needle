@@ -235,3 +235,24 @@ type RawGestureRecord struct {
 	Intensity    float64
 	Direction    int
 }
+
+// TechniqueIDs returns the sorted list of technique IDs in the dictionary.
+func (d *Dictionary) TechniqueIDs() []int {
+	tids := make([]int, len(d.Entries))
+	for i, e := range d.Entries {
+		tids[i] = int(e.TechniqueID)
+	}
+	sort.Ints(tids)
+	return tids
+}
+
+// FindNibbleForTechnique returns the nibble value that maps to the given technique ID.
+// Returns 0 if not found.
+func (d *Dictionary) FindNibbleForTechnique(tID int) byte {
+	for nibble, tcf := range d.ByteToTCFMap {
+		if int(tcf.TechniqueID) == tID {
+			return byte(nibble)
+		}
+	}
+	return 0
+}

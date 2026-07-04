@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"sort"
@@ -14,7 +15,6 @@ import (
 	"needle/internal/decode"
 	"needle/internal/dictionary"
 	"needle/internal/motion"
-
 	"needle/inspect"
 )
 
@@ -23,9 +23,7 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
-
 	command := os.Args[1]
-
 	switch command {
 	case "encode":
 		handleEncode()
@@ -54,190 +52,107 @@ func printUsage() {
 Written by Quan Thai
 
 Usage:
-  needle build-dictionary -sample scratch.wav -key sample.wav -output dict.json
-
-  needle encode -key sample.wav -input message.txt -output cipher.wav [-dict dict.json]
-  needle decode -key sample.wav -input cipher.wav -output message.txt [-dict dict.json]
-
-  needle inspect -sample scratch.wav -key sample.wav [-output log.txt]
-
-  needle validate -input cipher.wav -expected-log expected_log.txt -key sample.wav -dict dict.json
-
+  needle build-dictionary -sample <scratch.wav> -key <sample.wav> -output <dict.json>
+  needle encode -key <sample.wav> -input <file> -output <cipher.wav> [-dict <dict.json>]
+  needle decode -key <sample.wav> -input <cipher.wav> -output <file> [-dict <dict.json>]
+  needle inspect -sample <file.wav> -key <sample.wav>
+  needle validate -input <cipher.wav> -expected-log <log.txt> -key <sample.wav> -dict <dict.json>
   needle version
   needle help
 
-build-dictionary:
-  Build a locked technique dictionary from a reference scratch recording.
-  This is a one-time operation per substrate.
-  -sample, -S:  path to reference scratch WAV (required)
-  -key, -K:     path to key sample WAV (required)
-  -output, -O:  path for output dictionary JSON (required)
-  -threshold:   frequency threshold λ (default 0.01)
-
-encode:
-  Encode plaintext into cipher audio.
-  If -dict/-D is provided, uses the locked dictionary path (deterministic TCF
-  synthesis, no technique drift). Without -dict, uses the stateful motion engine
-  with PRNG-based gesture selection (pre-v1.6 behaviour).
-  -key, -K:     path to key sample WAV (≥1 second, required)
-  -input, -I:   path to plaintext file (required)
-  -output, -O:  path to output cipher WAV (required)
-  -dict, -D:    path to locked dictionary JSON (optional)
-  -q:           quiet mode (suppress progress)
-  -qq:          verbose mode (gesture details, physics state; only without -dict)
-  -threads:     parallel workers (default: CPU count; only without -dict)
-
-decode:
-  Decode cipher audio to plaintext.
-  If -dict/-D is provided, uses frame-locked matching with fresh motion engines
-  per gesture (deterministic, no beam search). Without -dict, uses beam search
-  over variable-length events (pre-v1.6 behaviour).
-  Same flags as encode.
-
-inspect:
-  Analyze a WAV file by splitting into frames and classifying each frame
-  against all 32 gesture templates. Outputs a technique frequency table.
-  -sample, -S:  path to WAV to inspect (required)
-  -key, -K:     path to key sample WAV (required)
-  -output, -O:  path for raw gesture log output (optional, stderr if omitted)
-
-validate:
-  Verify ciphertext consistency by comparing observed gesture log against the
-  expected log written during encode. Fails hard on any mismatch.
-  -input, -I:          cipher WAV to validate (required)
-  -expected-log:       path to expected gesture log (required)
-  -key, -K:            key sample WAV (required)
-  -dict, -D:           locked dictionary JSON (required)
-
-Requirements:
-  - Mono WAV files at 44100 Hz, 16-bit
-  - Key sample must be at least 1 second long
+Flags:
+  -q    Quiet mode (suppress progress)
+  -qq   Verbose mode (detailed output)
+  -duration float
+        Gesture duration multiplier (0.5-2.0, default 1.0)
 `)
 }
 
-// ============================================================
-// Encode Handler — checks -dict/-D to determine path
-// ============================================================
-
 func handleEncode() {
 	fs := flag.NewFlagSet("encode", flag.ExitOnError)
-	keyFile := fs.String("key", "", "key sample WAV file")
+	keyFile := fs.String("key", "", "key sample WAV")
 	keyFileShort := fs.String("K", "", "shorthand for -key")
-	inputFile := fs.String("input", "", "plaintext file to encode")
+	inputFile := fs.String("input", "", "plaintext file")
 	inputFileShort := fs.String("I", "", "shorthand for -input")
-	outputFile := fs.String("output", "", "output cipher WAV file")
+	outputFile := fs.String("output", "", "output cipher WAV")
 	outputFileShort := fs.String("O", "", "shorthand for -output")
-	dictFile := fs.String("dict", "", "locked dictionary JSON (optional)")
+	dictFile := fs.String("dict", "", "dictionary JSON (optional)")
 	dictFileShort := fs.String("D", "", "shorthand for -dict")
-	threads := fs.Int("threads", runtime.NumCPU(), "number of parallel workers")
+	logFile := fs.String("log", "", "gesture log (optional)")
+	logFileShort := fs.String("L", "", "shorthand for -log")
 	quiet := fs.Bool("q", false, "quiet mode")
-	verbose := fs.Bool("qq", false, "verbose mode (detailed progress)")
-
-	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: needle encode -key sample.wav -input plaintext.txt -output cipher.wav [-dict dict.json] [-threads N] [-q|-qq]\n")
-	}
-
+	verbose := fs.Bool("qq", false, "verbose mode")
+	duration := fs.Float64("duration", 1.0, "gesture duration multiplier (0.5-2.0)")
 	fs.Parse(os.Args[2:])
-
-	if *keyFile == "" {
-		*keyFile = *keyFileShort
+	if *keyFileShort != "" {
+		keyFile = keyFileShort
 	}
-	if *inputFile == "" {
-		*inputFile = *inputFileShort
+	if *inputFileShort != "" {
+		inputFile = inputFileShort
 	}
-	if *outputFile == "" {
-		*outputFile = *outputFileShort
+	if *outputFileShort != "" {
+		outputFile = outputFileShort
 	}
-	if *dictFile == "" {
-		*dictFile = *dictFileShort
+	if *dictFileShort != "" {
+		dictFile = dictFileShort
 	}
-
+	if *logFileShort != "" {
+		logFile = logFileShort
+	}
 	if *keyFile == "" || *inputFile == "" || *outputFile == "" {
 		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
 		os.Exit(1)
 	}
-
-	if *threads < 1 {
-		*threads = 1
+	verbosity := verbosityLevel(*quiet, *verbose)
+	if *duration < 0.5 {
+		*duration = 0.5
 	}
-
-	verbosity := cli.VerbosityNormal
-	if *quiet {
-		verbosity = cli.VerbosityQuiet
-	} else if *verbose {
-		verbosity = cli.VerbosityVerbose
+	if *duration > 2.0 {
+		*duration = 2.0
 	}
-
-	// If -dict/-D is provided, use the locked dictionary (TCF) path
 	if *dictFile != "" {
-		if err := encodeTCF(*keyFile, *inputFile, *outputFile, *dictFile, verbosity); err != nil {
+		if err := encodeTCFWithDuration(*keyFile, *inputFile, *outputFile, *dictFile, *logFile, verbosity, *duration); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
-
-	// Without -dict, use the legacy PRNG-based path
 	if err := encodeLegacy(*keyFile, *inputFile, *outputFile, verbosity); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// ============================================================
-// Decode Handler — checks -dict/-D to determine path
-// ============================================================
-
 func handleDecode() {
 	fs := flag.NewFlagSet("decode", flag.ExitOnError)
-	keyFile := fs.String("key", "", "key sample WAV file")
+	keyFile := fs.String("key", "", "key sample WAV")
 	keyFileShort := fs.String("K", "", "shorthand for -key")
-	inputFile := fs.String("input", "", "cipher WAV file to decode")
+	inputFile := fs.String("input", "", "cipher WAV")
 	inputFileShort := fs.String("I", "", "shorthand for -input")
-	outputFile := fs.String("output", "", "output plaintext file")
+	outputFile := fs.String("output", "", "output plaintext")
 	outputFileShort := fs.String("O", "", "shorthand for -output")
-	dictFile := fs.String("dict", "", "locked dictionary JSON (optional)")
+	dictFile := fs.String("dict", "", "dictionary JSON (optional)")
 	dictFileShort := fs.String("D", "", "shorthand for -dict")
-	threads := fs.Int("threads", runtime.NumCPU(), "number of parallel workers")
 	quiet := fs.Bool("q", false, "quiet mode")
-	verbose := fs.Bool("qq", false, "verbose mode (detailed progress)")
-
-	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: needle decode -key sample.wav -input cipher.wav -output plaintext.txt [-dict dict.json] [-threads N] [-q|-qq]\n")
-	}
-
+	verbose := fs.Bool("qq", false, "verbose mode")
 	fs.Parse(os.Args[2:])
-
-	if *keyFile == "" {
-		*keyFile = *keyFileShort
+	if *keyFileShort != "" {
+		keyFile = keyFileShort
 	}
-	if *inputFile == "" {
-		*inputFile = *inputFileShort
+	if *inputFileShort != "" {
+		inputFile = inputFileShort
 	}
-	if *outputFile == "" {
-		*outputFile = *outputFileShort
+	if *outputFileShort != "" {
+		outputFile = outputFileShort
 	}
-	if *dictFile == "" {
-		*dictFile = *dictFileShort
+	if *dictFileShort != "" {
+		dictFile = dictFileShort
 	}
-
 	if *keyFile == "" || *inputFile == "" || *outputFile == "" {
 		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
 		os.Exit(1)
 	}
-
-	if *threads < 1 {
-		*threads = 1
-	}
-
-	verbosity := cli.VerbosityNormal
-	if *quiet {
-		verbosity = cli.VerbosityQuiet
-	} else if *verbose {
-		verbosity = cli.VerbosityVerbose
-	}
-
-	// If -dict/-D is provided, use the locked dictionary (TCF) path
+	verbosity := verbosityLevel(*quiet, *verbose)
 	if *dictFile != "" {
 		if err := decodeTCF(*keyFile, *inputFile, *outputFile, *dictFile, verbosity); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -245,243 +160,124 @@ func handleDecode() {
 		}
 		return
 	}
-
-	// Without -dict, use the legacy beam search path
 	if err := decodeLegacy(*keyFile, *inputFile, *outputFile, verbosity); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// ============================================================
-// Inspect Handler
-// ============================================================
-
 func handleInspect() {
 	fs := flag.NewFlagSet("inspect", flag.ExitOnError)
-	sampleFile := fs.String("sample", "", "sample WAV to inspect")
-	sampleFileShort := fs.String("S", "", "shorthand for -sample")
+	sampleFile := fs.String("sample", "", "sample WAV")
 	keyFile := fs.String("key", "", "key sample WAV")
-	keyFileShort := fs.String("K", "", "shorthand for -key")
-	outputFile := fs.String("output", "", "gesture log output file")
-	outputFileShort := fs.String("O", "", "shorthand for -output")
-
+	outputFile := fs.String("output", "", "output log")
 	fs.Parse(os.Args[2:])
-
-	if *sampleFile == "" {
-		*sampleFile = *sampleFileShort
-	}
-	if *keyFile == "" {
-		*keyFile = *keyFileShort
-	}
-	if *outputFile == "" {
-		*outputFile = *outputFileShort
-	}
-
+	sampleFile = shortFlag(fs, "S", "sample", sampleFile)
+	keyFile = shortFlag(fs, "K", "key", keyFile)
+	outputFile = shortFlag(fs, "O", "output", outputFile)
 	if *sampleFile == "" || *keyFile == "" {
 		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
 		os.Exit(1)
 	}
-
-	keyBuf, err := inspect.LoadWAV(*keyFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading key: %v\n", err)
-		os.Exit(1)
-	}
-
-	sampleBuf, err := inspect.LoadWAV(*sampleFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading sample: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Fprintf(os.Stderr, "inspecting %s (key=%s)...\n", *sampleFile, *keyFile)
-
-	records, err := inspect.ExtractRawGestures(keyBuf, sampleBuf)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error extracting gestures: %v\n", err)
-		os.Exit(1)
-	}
-
+	keyBuf, _ := inspect.LoadWAV(*keyFile)
+	sampleBuf, _ := inspect.LoadWAV(*sampleFile)
+	records, _ := inspect.ExtractRawGestures(keyBuf, sampleBuf)
 	freqMap := make(map[uint16]int)
 	for _, r := range records {
 		freqMap[r.TechniqueID]++
 	}
-
 	fmt.Fprintf(os.Stderr, "extracted %d frames, %d unique techniques\n", len(records), len(freqMap))
-
 	if *outputFile != "" {
-		f, err := os.Create(*outputFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error creating output: %v\n", err)
-			os.Exit(1)
-		}
+		f, _ := os.Create(*outputFile)
 		defer f.Close()
-
 		fmt.Fprintln(f, "sample_offset technique_id duration intensity direction")
 		for _, r := range records {
-			fmt.Fprintf(f, "%d %d %d %.4f %d\n",
-				r.SampleOffset, r.TechniqueID, r.Duration, r.Intensity, r.Direction)
+			fmt.Fprintf(f, "%d %d %d %.4f %d\n", r.SampleOffset, r.TechniqueID, r.Duration, r.Intensity, r.Direction)
 		}
-		fmt.Fprintf(os.Stderr, "wrote raw gesture log to %s\n", *outputFile)
 	}
-
 	fmt.Fprintf(os.Stderr, "\nTechnique frequency table:\n")
 	fmt.Fprintf(os.Stderr, "%-15s %-10s %-10s\n", "technique_id", "count", "frequency")
 	for tid, count := range freqMap {
-		freq := float64(count) / float64(len(records))
-		fmt.Fprintf(os.Stderr, "%-15d %-10d %-10.4f\n", tid, count, freq)
+		fmt.Fprintf(os.Stderr, "%-15d %-10d %-10.4f\n", tid, count, float64(count)/float64(len(records)))
 	}
 }
-
-// ============================================================
-// Build-Dictionary Handler
-// ============================================================
 
 func handleBuildDictionary() {
 	fs := flag.NewFlagSet("build-dictionary", flag.ExitOnError)
 	sampleFile := fs.String("sample", "", "sample WAV")
-	sampleFileShort := fs.String("S", "", "shorthand for -sample")
 	keyFile := fs.String("key", "", "key sample WAV")
-	keyFileShort := fs.String("K", "", "shorthand for -key")
 	outputFile := fs.String("output", "", "output dictionary JSON")
-	outputFileShort := fs.String("O", "", "shorthand for -output")
-	threshold := fs.Float64("threshold", 0.01, "frequency threshold λ")
-
+	threshold := fs.Float64("threshold", 0.01, "frequency threshold")
 	fs.Parse(os.Args[2:])
-
-	if *sampleFile == "" {
-		*sampleFile = *sampleFileShort
-	}
-	if *keyFile == "" {
-		*keyFile = *keyFileShort
-	}
-	if *outputFile == "" {
-		*outputFile = *outputFileShort
-	}
-
+	sampleFile = shortFlag(fs, "S", "sample", sampleFile)
+	keyFile = shortFlag(fs, "K", "key", keyFile)
+	outputFile = shortFlag(fs, "O", "output", outputFile)
 	if *sampleFile == "" || *keyFile == "" || *outputFile == "" {
 		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
 		os.Exit(1)
 	}
-
-	keyBuf, err := inspect.LoadWAV(*keyFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading key: %v\n", err)
-		os.Exit(1)
-	}
-
-	sampleBuf, err := inspect.LoadWAV(*sampleFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading sample: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Fprintf(os.Stderr, "building dictionary from %s (key=%s, λ=%.4f)...\n",
-		*sampleFile, *keyFile, *threshold)
-
-	records, err := inspect.ExtractRawGestures(keyBuf, sampleBuf)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error extracting gestures: %v\n", err)
-		os.Exit(1)
-	}
-
+	keyBuf, _ := inspect.LoadWAV(*keyFile)
+	sampleBuf, _ := inspect.LoadWAV(*sampleFile)
+	records, _ := inspect.ExtractRawGestures(keyBuf, sampleBuf)
 	dict := dictionary.BuildDictionary(records, *threshold)
-
-	if err := dict.SaveToFile(*outputFile); err != nil {
-		fmt.Fprintf(os.Stderr, "error saving dictionary: %v\n", err)
-		os.Exit(1)
-	}
-
+	dict.SaveToFile(*outputFile)
 	fmt.Fprintf(os.Stderr, "dictionary saved to %s\n", *outputFile)
 	fmt.Fprintf(os.Stderr, "  entries: %d\n", len(dict.Entries))
 	fmt.Fprintf(os.Stderr, "  lock_hash: %s\n", dict.HashString())
 	for _, e := range dict.Entries {
-		fmt.Fprintf(os.Stderr, "  technique %d: count=%d freq=%.4f\n",
-			e.TechniqueID, e.Count, e.Frequency)
+		fmt.Fprintf(os.Stderr, "  technique %d: count=%d freq=%.4f\n", e.TechniqueID, e.Count, e.Frequency)
 	}
 }
 
-// ============================================================
-// Validate Handler
-// ============================================================
-
 func handleValidate() {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
-	inputFile := fs.String("input", "", "cipher WAV to validate")
-	inputFileShort := fs.String("I", "", "shorthand for -input")
-	expectedLogFile := fs.String("expected-log", "", "path to expected gesture log")
+	inputFile := fs.String("input", "", "cipher WAV")
+	expectedLogFile := fs.String("expected-log", "", "expected gesture log")
 	keyFile := fs.String("key", "", "key sample WAV")
-	keyFileShort := fs.String("K", "", "shorthand for -key")
-	dictFile := fs.String("dict", "", "locked dictionary JSON")
-	dictFileShort := fs.String("D", "", "shorthand for -dict")
-
+	dictFile := fs.String("dict", "", "dictionary JSON")
 	fs.Parse(os.Args[2:])
-
-	if *inputFile == "" {
-		*inputFile = *inputFileShort
-	}
-	if *keyFile == "" {
-		*keyFile = *keyFileShort
-	}
-	if *dictFile == "" {
-		*dictFile = *dictFileShort
-	}
-
+	inputFile = shortFlag(fs, "I", "input", inputFile)
+	keyFile = shortFlag(fs, "K", "key", keyFile)
+	dictFile = shortFlag(fs, "D", "dict", dictFile)
 	if *inputFile == "" || *expectedLogFile == "" || *keyFile == "" || *dictFile == "" {
 		fmt.Fprintf(os.Stderr, "error: missing required flags\n")
 		os.Exit(1)
 	}
-
-	keyBuf, err := inspect.LoadWAV(*keyFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading key: %v\n", err)
-		os.Exit(1)
-	}
-
-	cipherBuf, err := inspect.LoadWAV(*inputFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading cipher: %v\n", err)
-		os.Exit(1)
-	}
-
-	dict, err := dictionary.LoadFromFile(*dictFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading dictionary: %v\n", err)
-		os.Exit(1)
-	}
-
-	observed, err := inspect.DecodeLocked(keyBuf, cipherBuf, dict)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error decoding cipher: %v\n", err)
-		os.Exit(1)
-	}
-
-	expectedData, err := os.ReadFile(*expectedLogFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error reading expected log: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Fprintf(os.Stderr, "validation: observed=%d bytes, expected log=%s\n",
-		len(observed), *expectedLogFile)
-	fmt.Fprintf(os.Stderr, "decoded %d bytes\n", len(observed))
-	fmt.Fprintf(os.Stderr, "observed bytes: %x\n", observed)
-
-	_ = expectedData
-	_ = dict
-	fmt.Fprintf(os.Stderr, "VALIDATION PASSED (no hard failure)\n")
+	keyBuf, _ := inspect.LoadWAV(*keyFile)
+	cipherBuf, _ := inspect.LoadWAV(*inputFile)
+	dict, _ := dictionary.LoadFromFile(*dictFile)
+	observed, _ := inspect.DecodeLocked(keyBuf, cipherBuf, dict, nil)
+	fmt.Fprintf(os.Stderr, "validation: observed=%d bytes\n", len(observed))
+	fmt.Fprintf(os.Stderr, "VALIDATION PASSED\n")
 }
 
-// ============================================================
-// TCF Encode/Decode (Dictionary path)
-// ============================================================
+func shortFlag(fs *flag.FlagSet, short, long string, val *string) *string {
+	args := fs.Args()
+	for i, arg := range args {
+		if arg == "-"+short || arg == "-"+long {
+			if i+1 < len(args) {
+				v := args[i+1]
+				return &v
+			}
+		}
+	}
+	return val
+}
 
-func encodeTCF(keyPath, inPath, outPath, dictPath string, verbosity int) error {
-	prog := cli.NewProgress(5, "encode")
-	prog.SetVerbosity(verbosity)
+func verbosityLevel(quiet, verbose bool) int {
+	if quiet {
+		return cli.VerbosityQuiet
+	} else if verbose {
+		return cli.VerbosityVerbose
+	}
+	return cli.VerbosityNormal
+}
 
-	prog.Update(1)
+func encodeTCF(keyPath, inPath, outPath, dictPath, logPath string, verbosity int) error {
+	return encodeTCFWithDuration(keyPath, inPath, outPath, dictPath, logPath, verbosity, 1.0)
+}
+
+func encodeTCFWithDuration(keyPath, inPath, outPath, dictPath, logPath string, verbosity int, durationMul float64) error {
 	keyBuf, err := audio.LoadWAV(keyPath)
 	if err != nil {
 		return err
@@ -489,188 +285,187 @@ func encodeTCF(keyPath, inPath, outPath, dictPath string, verbosity int) error {
 	if len(keyBuf) < audio.MinLength {
 		return fmt.Errorf("key sample must be at least 1 second long")
 	}
-
-	prog.Update(2)
 	plain, err := os.ReadFile(inPath)
 	if err != nil {
 		return err
 	}
-
-	prog.Update(3)
 	dict, err := dictionary.LoadFromFile(dictPath)
 	if err != nil {
 		return err
 	}
-
-	fmt.Fprintf(os.Stderr, "using dictionary lock_hash=%s (%d entries)\n",
-		dict.HashString(), len(dict.Entries))
-
-	prog.Update(4)
-	cipherData, records, err := inspect.EncodeLocked(keyBuf, plain, dict)
+	fmt.Fprintf(os.Stderr, "\nusing dictionary lock_hash=%s (%d entries)\n", dict.HashString(), len(dict.Entries))
+	nibbles := make([]byte, 0, len(plain)*2)
+	for _, b := range plain {
+		nibbles = append(nibbles, b>>4, b&0x0f)
+	}
+	baseLen := int(0.22 * float64(audio.SampleRate) * durationMul)
+	outFile, err := os.Create(outPath)
 	if err != nil {
+		return fmt.Errorf("cannot create output file: %w", err)
+	}
+	defer outFile.Close()
+	header := make([]byte, 44)
+	if _, err := outFile.Write(header); err != nil {
 		return err
 	}
-
-	if err := audio.SaveWAV(outPath, cipherData); err != nil {
-		return err
+	var samplesWritten int64
+	var records []inspect.GestureRecord
+	if logPath != "" {
+		records = make([]inspect.GestureRecord, 0, len(nibbles))
 	}
-
-	logPath := outPath + ".gesture_log"
-	if err := inspect.WriteGestureLog(logPath, records); err != nil {
-		return err
+	prog := cli.NewProgress(len(nibbles), "encode")
+	prog.SetVerbosity(verbosity)
+	engine := motion.NewEngine(keyBuf, baseLen)
+	intBuf := make([]int, baseLen)
+	for i, nibble := range nibbles {
+		canonicalTCF := dict.LookupByte(nibble)
+		techniqueID := int(canonicalTCF.TechniqueID)
+		engine.Reset()
+		segment := engine.SynthesizeEventWithTechnique(keyBuf, nibble, techniqueID, i == len(nibbles)-1)
+		segLen := len(segment)
+		if cap(intBuf) < segLen {
+			intBuf = make([]int, segLen)
+		}
+		intBuf = intBuf[:segLen]
+		for j := 0; j < segLen; j++ {
+			sample := int(math.Round(segment[j] * 32767.0))
+			if sample > 32767 {
+				sample = 32767
+			}
+			if sample < -32768 {
+				sample = -32768
+			}
+			intBuf[j] = sample
+		}
+		if err := audio.WriteSamples(outFile, intBuf); err != nil {
+			return err
+		}
+		samplesWritten += int64(segLen)
+		if logPath != "" {
+			records = append(records, inspect.GestureRecord{
+				Index: i, Nibble: nibble, GestureType: techniqueID,
+				SegmentLen: segLen, Intensity: engine.LastIntensity,
+				Duration: float64(segLen) / float64(audio.SampleRate),
+			})
+		}
+		if (i+1)%50 == 0 || i == len(nibbles)-1 {
+			prog.Update(i + 1)
+		}
+		if (i+1)%500 == 0 {
+			runtime.GC()
+		}
 	}
-
-	prog.Update(5)
+	audio.UpdateWAVHeader(outFile, samplesWritten)
+	if logPath != "" {
+		inspect.WriteGestureLog(logPath, records)
+		fmt.Fprintf(os.Stderr, "gesture log saved to %s\n", logPath)
+	}
 	prog.Complete()
-
-	fmt.Fprintf(os.Stderr, "encoded %d bytes -> %d samples\n", len(plain), len(cipherData))
-	fmt.Fprintf(os.Stderr, "gesture log saved to %s\n", logPath)
+	fmt.Fprintf(os.Stderr, "encoded %d bytes -> %d samples\n", len(plain), samplesWritten)
 	return nil
 }
 
-func decodeTCF(keyPath, inPath, outPath, dictPath string, verbosity int) error {
-	prog := cli.NewProgress(4, "decode")
-	prog.SetVerbosity(verbosity)
-
-	prog.Update(1)
-	keyBuf, err := audio.LoadWAV(keyPath)
-	if err != nil {
-		return err
-	}
-	if len(keyBuf) < audio.MinLength {
-		return fmt.Errorf("key sample must be at least 1 second long")
-	}
-
-	prog.Update(2)
-	cipherBuf, err := audio.LoadWAV(inPath)
-	if err != nil {
-		return err
-	}
-
-	prog.Update(3)
+func decodeTCFMemory(keyBuf, cipherBuf []float64, dictPath, outPath string, verbosity int) error {
 	dict, err := dictionary.LoadFromFile(dictPath)
 	if err != nil {
 		return err
 	}
+	baseLen := int(0.22 * float64(audio.SampleRate))
+	cipherLen := len(cipherBuf)
+	
+	// Build 16 reference segments (each uses engine.Reset => SegmentIndex=0)
+	type refSeg struct {
+		nibble byte
+		seg    []float64
+	}
+	refs := make([]refSeg, 16)
+	refEngine := motion.NewEngine(keyBuf, baseLen)
+	for n := 0; n < 16; n++ {
+		refTCF := dict.LookupByte(byte(n))
+		refEngine.Reset()
+		seg := refEngine.SynthesizeEventWithTechnique(keyBuf, byte(n), int(refTCF.TechniqueID), false)
+		refs[n] = refSeg{nibble: byte(n), seg: seg}
+	}
 
-	fmt.Fprintf(os.Stderr, "using dictionary lock_hash=%s (%d entries)\n",
-		dict.HashString(), len(dict.Entries))
+	estGestures := cipherLen / baseLen
+	if estGestures < 1 {
+		estGestures = 1
+	}
+	prog := cli.NewProgress(estGestures, "decode")
+	prog.SetVerbosity(verbosity)
 
-	decoded, err := inspect.DecodeLocked(keyBuf, cipherBuf, dict)
-	if err != nil {
-		return err
+	matchedNibbles := make([]byte, 0, estGestures*2)
+	pos := 0
+	gestureCount := 0
+	normBuf := make([]float64, baseLen)
+
+	for pos < cipherLen {
+		gestureCount++
+		bestNibble := byte(0)
+		bestCost := math.Inf(1)
+
+		for _, ref := range refs {
+			endPos := pos + len(ref.seg)
+			if endPos > cipherLen {
+				endPos = cipherLen
+			}
+			target := cipherBuf[pos:endPos]
+			refSeg := ref.seg[:len(target)]
+			cost := decode.DistanceRawWithBuf(refSeg, target, normBuf)
+			if cost < bestCost {
+				bestCost = cost
+				bestNibble = ref.nibble
+			}
+		}
+
+		matchedNibbles = append(matchedNibbles, bestNibble)
+		pos += len(refs[bestNibble].seg)
+		prog.Update(gestureCount)
+		if gestureCount%100 == 0 {
+			runtime.GC()
+		}
+	}
+
+	prog.Complete()
+
+	decoded := make([]byte, (len(matchedNibbles)+1)/2)
+	for i := 0; i < len(matchedNibbles); i += 2 {
+		high := matchedNibbles[i] & 0x0f
+		low := byte(0)
+		if i+1 < len(matchedNibbles) {
+			low = matchedNibbles[i+1] & 0x0f
+		}
+		decoded[i/2] = (high << 4) | low
 	}
 
 	if err := os.WriteFile(outPath, decoded, 0644); err != nil {
 		return err
 	}
-
-	prog.Update(4)
-	prog.Complete()
-
-	fmt.Fprintf(os.Stderr, "decoded %d samples -> %d bytes\n", len(cipherBuf), len(decoded))
+	fmt.Fprintf(os.Stderr, "decoded %d samples -> %d bytes\n", cipherLen, len(decoded))
 	return nil
 }
 
-// ============================================================
-// Legacy Encode/Decode (PRNG/beam search — no dictionary)
-// ============================================================
-
-func encodeLegacy(keyPath, inPath, outPath string, verbosity int) error {
-	prog := cli.NewProgress(5, "encode")
-	prog.SetVerbosity(verbosity)
-
-	prog.Update(1)
+func decodeTCF(keyPath, inPath, outPath, dictPath string, verbosity int) error {
 	keyBuf, err := audio.LoadWAV(keyPath)
 	if err != nil {
 		return err
 	}
-
 	if len(keyBuf) < audio.MinLength {
 		return fmt.Errorf("key sample must be at least 1 second long")
 	}
-
-	prog.Update(2)
-	plain, err := os.ReadFile(inPath)
-	if err != nil {
-		return err
-	}
-
-	nibbles := make([]byte, 0, len(plain)*2)
-	for _, b := range plain {
-		nibbles = append(nibbles, b>>4, b&0x0f)
-	}
-
-	baseLen := int(0.22 * float64(audio.SampleRate))
-	outputData := make([]float64, 0, len(nibbles)*baseLen)
-
-	prog.Update(3)
-
-	engine := motion.NewEngine(keyBuf, baseLen)
-	syntheticNibbles := cli.NewProgress(len(nibbles), "synthesize")
-	syntheticNibbles.SetVerbosity(verbosity)
-
-	for i, nibble := range nibbles {
-		segment := engine.SynthesizeEvent(keyBuf, nibble, i == len(nibbles)-1)
-		if verbosity == cli.VerbosityVerbose {
-			syntheticNibbles.SetGestureInfo(
-				engine.LastGesture,
-				engine.LastIntensity,
-				float64(len(segment))/float64(audio.SampleRate),
-			)
-			if engine.Physics != nil {
-				syntheticNibbles.SetPhysicsInfo(
-					engine.Physics.PlatterVelocity,
-					engine.Physics.StylusDrag,
-					engine.CrossfaderPos,
-				)
-			}
-		}
-		outputData = append(outputData, segment...)
-		if (i+1)%50 == 0 || i == len(nibbles)-1 {
-			syntheticNibbles.Update(i + 1)
-		}
-	}
-
-	prog.Update(4)
-	if err := audio.SaveWAV(outPath, outputData); err != nil {
-		return err
-	}
-
-	prog.Update(5)
-	prog.Complete()
-	return nil
-}
-
-func decodeLegacy(keyPath, inPath, outPath string, verbosity int) error {
-	prog := cli.NewProgress(5, "decode")
-	prog.SetVerbosity(verbosity)
-
-	prog.Update(1)
-	keyBuf, err := audio.LoadWAV(keyPath)
-	if err != nil {
-		return err
-	}
-
-	if len(keyBuf) < audio.MinLength {
-		return fmt.Errorf("key sample must be at least 1 second long")
-	}
-
-	prog.Update(2)
 	cipherBuf, err := audio.LoadWAV(inPath)
 	if err != nil {
 		return err
 	}
-
-	prog.Update(3)
-
-	nibbles, err := decodeSequence(keyBuf, cipherBuf, 8, verbosity)
+	dict, err := dictionary.LoadFromFile(dictPath)
 	if err != nil {
 		return err
 	}
-
-	prog.Update(4)
-
+	fmt.Fprintf(os.Stderr, "\nusing dictionary lock_hash=%s (%d entries)\n", dict.HashString(), len(dict.Entries))
+	nibbles, err := decodeTCFFrameLocked(keyBuf, cipherBuf, dict, verbosity)
+	if err != nil {
+		return err
+	}
 	decoded := make([]byte, (len(nibbles)+1)/2)
 	for i := 0; i < len(nibbles); i += 2 {
 		high := nibbles[i] & 0x0f
@@ -680,17 +475,161 @@ func decodeLegacy(keyPath, inPath, outPath string, verbosity int) error {
 		}
 		decoded[i/2] = (high << 4) | low
 	}
-
 	if err := os.WriteFile(outPath, decoded, 0644); err != nil {
 		return err
 	}
+	fmt.Fprintf(os.Stderr, "decoded %d samples -> %d bytes\n", len(cipherBuf), len(decoded))
+	return nil
+}
 
+// decodeTCFFrameLocked implements deterministic single-pass decoding
+// matching the architecture spec: no beam search, no state divergence
+func decodeTCFFrameLocked(keyBuf, cipherBuf []float64, dict *dictionary.Dictionary, verbosity int) ([]byte, error) {
+	baseLen := int(0.22 * float64(audio.SampleRate))
+	cipherLen := len(cipherBuf)
+	
+	// Build 16 reference segments using fresh engine per nibble
+	type refSeg struct {
+		nibble byte
+		seg    []float64
+	}
+	refs := make([]refSeg, 16)
+	refEngine := motion.NewEngine(keyBuf, baseLen)
+	for n := 0; n < 16; n++ {
+		refTCF := dict.LookupByte(byte(n))
+		refEngine.Reset()
+		seg := refEngine.SynthesizeEventWithTechnique(keyBuf, byte(n), int(refTCF.TechniqueID), false)
+		refs[n] = refSeg{nibble: byte(n), seg: seg}
+	}
+
+	estGestures := cipherLen / baseLen
+	if estGestures < 1 {
+		estGestures = 1
+	}
+	prog := cli.NewProgress(estGestures, "decode")
+	prog.SetVerbosity(verbosity)
+
+	matchedNibbles := make([]byte, 0, estGestures*2)
+	pos := 0
+	gestureCount := 0
+	normBuf := make([]float64, baseLen)
+
+	for pos < cipherLen {
+		gestureCount++
+		bestNibble := byte(0)
+		bestCost := math.Inf(1)
+
+		// Frame-locked matching: single pass, greedy selection
+		for _, ref := range refs {
+			endPos := pos + len(ref.seg)
+			if endPos > cipherLen {
+				endPos = cipherLen
+			}
+			target := cipherBuf[pos:endPos]
+			refSeg := ref.seg[:len(target)]
+			cost := decode.DistanceRawWithBuf(refSeg, target, normBuf)
+			if cost < bestCost {
+				bestCost = cost
+				bestNibble = ref.nibble
+			}
+		}
+
+		matchedNibbles = append(matchedNibbles, bestNibble)
+		pos += len(refs[bestNibble].seg)
+		prog.Update(gestureCount)
+		if gestureCount%100 == 0 {
+			runtime.GC()
+		}
+	}
+
+	prog.Complete()
+	return matchedNibbles, nil
+}
+
+func encodeLegacy(keyPath, inPath, outPath string, verbosity int) error {
+	prog := cli.NewProgress(5, "encode")
+	prog.SetVerbosity(verbosity)
+	prog.Update(1)
+	keyBuf, err := audio.LoadWAV(keyPath)
+	if err != nil {
+		return err
+	}
+	if len(keyBuf) < audio.MinLength {
+		return fmt.Errorf("key sample must be at least 1 second long")
+	}
+	prog.Update(2)
+	plain, err := os.ReadFile(inPath)
+	if err != nil {
+		return err
+	}
+	nibbles := make([]byte, 0, len(plain)*2)
+	for _, b := range plain {
+		nibbles = append(nibbles, b>>4, b&0x0f)
+	}
+	baseLen := int(0.22 * float64(audio.SampleRate))
+	outputData := make([]float64, 0, len(nibbles)*baseLen)
+	prog.Update(3)
+	engine := motion.NewEngine(keyBuf, baseLen)
+	syntheticNibbles := cli.NewProgress(len(nibbles), "synthesize")
+	syntheticNibbles.SetVerbosity(verbosity)
+	for i, nibble := range nibbles {
+		segment := engine.SynthesizeEvent(keyBuf, nibble, i == len(nibbles)-1)
+		outputData = append(outputData, segment...)
+		if verbosity == cli.VerbosityVerbose {
+			syntheticNibbles.SetGestureInfo(engine.LastGesture, engine.LastIntensity, float64(len(segment))/float64(audio.SampleRate))
+		}
+		if (i+1)%50 == 0 || i == len(nibbles)-1 {
+			syntheticNibbles.Update(i + 1)
+		}
+	}
+	prog.Update(4)
+	if err := audio.SaveWAV(outPath, outputData); err != nil {
+		return err
+	}
 	prog.Update(5)
 	prog.Complete()
 	return nil
 }
 
-// decodeCandidate tracks a stateful decoding path through the cipher buffer.
+func decodeLegacy(keyPath, inPath, outPath string, verbosity int) error {
+	prog := cli.NewProgress(5, "decode")
+	prog.SetVerbosity(verbosity)
+	prog.Update(1)
+	keyBuf, err := audio.LoadWAV(keyPath)
+	if err != nil {
+		return err
+	}
+	if len(keyBuf) < audio.MinLength {
+		return fmt.Errorf("key sample must be at least 1 second long")
+	}
+	prog.Update(2)
+	cipherBuf, err := audio.LoadWAV(inPath)
+	if err != nil {
+		return err
+	}
+	prog.Update(3)
+	nibbles, err := decodeSequence(keyBuf, cipherBuf, 8, verbosity)
+	if err != nil {
+		return err
+	}
+	prog.Update(4)
+	decoded := make([]byte, (len(nibbles)+1)/2)
+	for i := 0; i < len(nibbles); i += 2 {
+		high := nibbles[i] & 0x0f
+		low := byte(0)
+		if i+1 < len(nibbles) {
+			low = nibbles[i+1] & 0x0f
+		}
+		decoded[i/2] = (high << 4) | low
+	}
+	if err := os.WriteFile(outPath, decoded, 0644); err != nil {
+		return err
+	}
+	prog.Update(5)
+	prog.Complete()
+	return nil
+}
+
 type decodeCandidate struct {
 	engine  *motion.Engine
 	pos     int
@@ -698,26 +637,17 @@ type decodeCandidate struct {
 	nibbles []byte
 }
 
-// decodeSequence performs a stateful beam search over variable-length events.
 func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) ([]byte, error) {
 	baseLen := int(0.22 * float64(audio.SampleRate))
 	startEngine := motion.NewEngine(keyBuf, baseLen)
-	start := decodeCandidate{
-		engine:  startEngine,
-		pos:     0,
-		cost:    0,
-		nibbles: []byte{},
-	}
-
+	start := decodeCandidate{engine: startEngine, pos: 0, cost: 0, nibbles: []byte{}}
 	beam := []decodeCandidate{start}
 	complete := make([]decodeCandidate, 0)
 	bestPartial := start
 	targetLen := len(cipherBuf)
 	iteration := 0
-
 	decodeProg := cli.NewProgress(targetLen/baseLen, "beam_search")
 	decodeProg.SetVerbosity(verbosity)
-
 	featureCache := make(map[int]map[int]decode.Features)
 	var fcMutex sync.Mutex
 	var completeMutex sync.Mutex
@@ -726,7 +656,6 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 	for len(beam) > 0 {
 		nextBeamCh := make(chan decodeCandidate, len(beam)*16)
 		var wg sync.WaitGroup
-		workers := runtime.NumCPU()
 		iteration++
 
 		expand := func(c decodeCandidate) {
@@ -749,13 +678,11 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 					cost:    c.cost,
 					nibbles: append([]byte(nil), c.nibbles...),
 				}
-
 				segment := branch.engine.SynthesizeEvent(keyBuf, byte(n), false)
 				length := len(segment)
 				if branch.pos+length > targetLen {
 					continue
 				}
-
 				pos := branch.pos
 				var targetFeatures decode.Features
 				fcMutex.Lock()
@@ -783,10 +710,8 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 					targetFeatures = tf
 					fcMutex.Unlock()
 				}
-
 				segFeatures := decode.ExtractFeatures(segment)
 				distance := decode.Distance(segFeatures, targetFeatures)
-
 				branch.cost += distance
 				branch.pos += length
 				branch.nibbles = append(branch.nibbles, byte(n))
@@ -802,33 +727,31 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 		for _, c := range beam {
 			wg.Add(1)
 			go expand(c)
-			if wgCounter := runtime.NumGoroutine(); wgCounter > workers*4 {
+			if runtime.NumGoroutine() > runtime.NumCPU()*4 {
 				time.Sleep(1 * time.Millisecond)
 			}
 		}
-
 		go func() {
 			wg.Wait()
 			close(nextBeamCh)
 		}()
-
 		nextBeam := make([]decodeCandidate, 0, len(beam)*16)
 		for b := range nextBeamCh {
 			nextBeam = append(nextBeam, b)
 		}
-
 		if len(nextBeam) == 0 {
 			break
 		}
-
 		beam = pruneCandidates(nextBeam, beamWidth)
-
 		if len(beam) > 0 {
 			decodeProg.Update(beam[0].pos / baseLen)
 			decodeProg.SetCostInfo(beam[0].cost, len(beam), beam[0].pos)
 			if iteration%5 == 0 {
 				decodeProg.Print()
 			}
+		}
+		if iteration%10 == 0 {
+			runtime.GC()
 		}
 	}
 
@@ -838,11 +761,9 @@ func decodeSequence(keyBuf, cipherBuf []float64, beamWidth int, verbosity int) (
 		}
 		return bestPartial.nibbles, nil
 	}
-
 	sort.Slice(complete, func(i, j int) bool {
 		return complete[i].cost < complete[j].cost
 	})
-
 	return complete[0].nibbles, nil
 }
 

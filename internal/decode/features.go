@@ -63,6 +63,64 @@ func DistanceRaw(s1, s2 []float64) float64 {
 	return 0.6*corrDist + 0.25*specDist + 0.15*envDist
 }
 
+// DistanceRawWithBuf compares two raw segments using a reusable normalization buffer to reduce allocations
+func DistanceRawWithBuf(s1, s2 []float64, normBuf []float64) float64 {
+	if len(s1) != len(s2) {
+		return math.Inf(1)
+	}
+
+	n := len(s1)
+	
+	// Ensure normBuf is large enough
+	if len(normBuf) < n {
+		normBuf = make([]float64, n)
+	}
+	
+	// Correlation distance (compute means)
+	mean1 := 0.0
+	mean2 := 0.0
+	for i := 0; i < n; i++ {
+		mean1 += s1[i]
+		mean2 += s2[i]
+	}
+	mean1 /= float64(n)
+	mean2 /= float64(n)
+
+	// Normalize s1 into normBuf and compute covariance with s2
+	cov := 0.0
+	var1 := 0.0
+	var2 := 0.0
+	for i := 0; i < n; i++ {
+		d1 := s1[i] - mean1
+		d2 := s2[i] - mean2
+		normBuf[i] = d1
+		cov += d1 * d2
+		var1 += d1 * d1
+		var2 += d2 * d2
+	}
+	
+	if var1 <= 0 || var2 <= 0 {
+		return math.Inf(1)
+	}
+	
+	corr := cov / math.Sqrt(var1*var2) / float64(n)
+	if corr > 1.0 {
+		corr = 1.0
+	}
+	if corr < -1.0 {
+		corr = -1.0
+	}
+	corrDist := 1.0 - corr
+
+	// Spectral distance: band energies (compute without extra allocations)
+	specDist := spectralDistance(s1, s2)
+
+	// Envelope distance
+	envDist := envelopeDistance(s1, s2)
+
+	return 0.6*corrDist + 0.25*specDist + 0.15*envDist
+}
+
 // Distance computes multi-metric ensemble distance for robust classification
 // Combines: normalized cross-correlation, spectral distance, and envelope matching
 func Distance(f1, f2 Features) float64 {

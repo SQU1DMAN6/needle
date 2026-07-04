@@ -311,7 +311,8 @@ func ExtractRawGestures(keyBuf, sampleBuf []float64) ([]dictionary.RawGestureRec
 
 // DecodeLocked decodes ciphertext audio using a locked dictionary.
 // Uses fresh motion engines per gesture for matching — identical to EncodeLocked.
-func DecodeLocked(keyBuf, cipherBuf []float64, dict *dictionary.Dictionary) ([]byte, error) {
+// progressFn is an optional callback called with (current, total) after each gesture.
+func DecodeLocked(keyBuf, cipherBuf []float64, dict *dictionary.Dictionary, progressFn func(current, total int)) ([]byte, error) {
 	if len(keyBuf) < audio.MinLength {
 		return nil, fmt.Errorf("key sample must be at least 1 second long")
 	}
@@ -320,8 +321,14 @@ func DecodeLocked(keyBuf, cipherBuf []float64, dict *dictionary.Dictionary) ([]b
 	cipherLen := len(cipherBuf)
 	matchedNibbles := make([]byte, 0)
 	pos := 0
+	gestureCount := 0
+	totalEst := cipherLen / baseLen
+	if totalEst < 1 {
+		totalEst = 1
+	}
 
 	for pos < cipherLen {
+		gestureCount++
 		bestNibble := byte(0)
 		bestCost := -1.0
 
@@ -354,6 +361,11 @@ func DecodeLocked(keyBuf, cipherBuf []float64, dict *dictionary.Dictionary) ([]b
 		refEngine := motion.NewEngine(keyBuf, baseLen)
 		refSegment := refEngine.SynthesizeEventWithTechnique(keyBuf, bestNibble, int(refTCF.TechniqueID), false)
 		pos += len(refSegment)
+
+		// Report progress
+		if progressFn != nil {
+			progressFn(gestureCount, totalEst)
+		}
 	}
 
 	// Convert nibbles to bytes

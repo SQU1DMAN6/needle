@@ -20,7 +20,7 @@ type Engine struct {
 	KeySignature  uint64
 	SegmentLen    int
 	State         *State
-	SegmentIndex  int64 // Track segment number for consistent seeding
+	SegmentIndex  int64
 	Tempo         float64
 	BeatPosition  float64
 	PhraseEnergy  float64
@@ -31,10 +31,9 @@ type Engine struct {
 	SegmentBuf    []float64
 }
 
-// NewEngine creates a new motion synthesis engine
 func NewEngine(keyData []float64, segmentLen int) *Engine {
 	keySig := crypto.KeySignature(keyData)
-	tempo := 88.0 + float64((keySig>>32)%32) // 88-119 BPM for groove variety
+	tempo := 88.0 + float64((keySig>>32)%32)
 	return &Engine{
 		KeySignature:  keySig,
 		SegmentLen:    segmentLen,
@@ -51,12 +50,8 @@ func NewEngine(keyData []float64, segmentLen int) *Engine {
 	}
 }
 
-// EventLen returns a variable event duration based on key, nibble, tempo, and groove.
-// Realistic scratching events typically last 300-700ms for musical coherence.
 func (e *Engine) EventLen(byteVal byte) int {
 	beatSamples := float64(audio.SampleRate) * 60.0 / e.Tempo
-	// Longer subdivisions for more realistic scratching:
-	// 1 beat = ~680ms at 88 BPM, so these produce mostly 320-420ms gestures.
 	subdivisions := []float64{0.55, 0.65, 0.8, 1.0}
 
 	seed := crypto.SeedGen(e.KeySignature, byteVal, e.SegmentIndex)
@@ -64,16 +59,14 @@ func (e *Engine) EventLen(byteVal byte) int {
 	sub := subdivisions[rng.NextInt(len(subdivisions))]
 	drift := (rng.Next() - 0.5) * 0.08 * beatSamples
 
-	// Phrase-aware timing: favor longer endings at phrase boundaries
 	phraseFactor := 1.0
 	if e.BeatPosition > 3.0 {
 		phraseFactor = 1.15
 	}
 
-	// Adjusted for more musical phrase stability: clamp to 320-420ms.
 	length := int(sub*beatSamples*phraseFactor + drift)
-	minLen := int(math.Round(0.32 * float64(audio.SampleRate))) // 320ms minimum
-	maxLen := int(math.Round(0.42 * float64(audio.SampleRate))) // 420ms maximum
+	minLen := int(math.Round(0.32 * float64(audio.SampleRate)))
+	maxLen := int(math.Round(0.42 * float64(audio.SampleRate)))
 	if length < minLen {
 		length = minLen
 	}
@@ -94,7 +87,6 @@ func (e *Engine) GetPerformanceContext() gesture.PerformanceContext {
 	}
 }
 
-// Clone duplicates engine state for stateful decode candidate expansion.
 func (e *Engine) Clone() *Engine {
 	stateCopy := *e.State
 	var physicsCopy *PhysicsState
@@ -118,14 +110,11 @@ func (e *Engine) Clone() *Engine {
 	}
 }
 
-// SynthesizeEvent generates audio for a variable-length event using seeded gesture policy.
 func (e *Engine) SynthesizeEvent(source []float64, byteVal byte, final bool) []float64 {
-	// Use context-aware seed generation for better security
 	seed := crypto.SeedGenWithContext(
 		e.KeySignature, byteVal, e.SegmentIndex,
 		e.BeatPosition, e.PhraseEnergy, e.LastGesture,
 	)
-	// Use the nibble as an accent layer rather than a hard loudness clamp.
 	nibbleAccent := float64(byteVal&0x0f) / 15.0
 	intensity := 0.42 + 0.42*nibbleAccent + 0.12*e.PhraseEnergy
 	if e.BeatPosition < 0.18 || e.BeatPosition > 3.65 {
@@ -140,9 +129,6 @@ func (e *Engine) SynthesizeEvent(source []float64, byteVal byte, final bool) []f
 	return e.synthesizeWithPolicy(source, byteVal, policy, final)
 }
 
-// SynthesizeEventWithTechnique generates audio for a fixed technique ID (from dictionary).
-// This is the deterministic path: technique comes from the locked dictionary, not PRNG.
-// Uses the same physics engine as the legacy path for realistic audio.
 func (e *Engine) SynthesizeEventWithTechnique(source []float64, byteVal byte, techniqueID int, final bool) []float64 {
 	nibbleAccent := float64(byteVal&0x0f) / 15.0
 	intensity := 0.42 + 0.42*nibbleAccent + 0.12*e.PhraseEnergy
@@ -153,24 +139,19 @@ func (e *Engine) SynthesizeEventWithTechnique(source []float64, byteVal byte, te
 		intensity = 0.96
 	}
 
-	// Compute event length deterministically from byte value and engine state
-	// (EventLen uses PRNG, so we use a deterministic approximation)
 	eventLen := e.deterministicEventLen(byteVal)
 
-	// Build a policy with the fixed technique ID — no PRNG, no context-based selection
 	policy := &gesture.GesturePolicy{
 		Type:         techniqueID,
 		Intensity:    intensity,
 		DurationMult: 1.0,
 	}
 
-	// Use the canonical curve templates directly
 	tmpl := gesture.Templates[techniqueID]
 	if tmpl != nil {
 		policy.VelocityCurve = tmpl.VelocityCurve
 		policy.GatingCurve = tmpl.GatingCurve
 	} else {
-		// Fallback to technique 0
 		tmpl0 := gesture.Templates[0]
 		if tmpl0 != nil {
 			policy.VelocityCurve = tmpl0.VelocityCurve
@@ -186,12 +167,9 @@ func (e *Engine) SynthesizeEventWithTechnique(source []float64, byteVal byte, te
 	return e.synthesizeWithPolicyExplicit(source, byteVal, policy, eventLen, final)
 }
 
-// deterministicEventLen computes event length without PRNG.
-// Uses the nibble value and engine state to determine duration deterministically.
 func (e *Engine) deterministicEventLen(byteVal byte) int {
 	beatSamples := float64(audio.SampleRate) * 60.0 / e.Tempo
 	nibble := float64(byteVal&0x0f) / 15.0
-	// Map nibble value to subdivision: 0.55-1.0 range
 	sub := 0.55 + 0.45*nibble
 	phraseFactor := 1.0
 	if e.BeatPosition > 3.0 {
@@ -209,18 +187,12 @@ func (e *Engine) deterministicEventLen(byteVal byte) int {
 	return length
 }
 
-// synthesizeWithPolicy is the shared synthesis core used by the legacy path.
-// It contains all the physics, pitch shifting, crossfader, and gate logic that produces
-// realistic scratching audio.
 func (e *Engine) synthesizeWithPolicy(source []float64, byteVal byte, policy *gesture.GesturePolicy, final bool) []float64 {
 	eventLen := e.EventLen(byteVal)
 	return e.synthesizeWithPolicyExplicit(source, byteVal, policy, eventLen, final)
 }
 
-// synthesizeWithPolicyExplicit is the shared synthesis core with explicit event length.
 func (e *Engine) synthesizeWithPolicyExplicit(source []float64, byteVal byte, policy *gesture.GesturePolicy, eventLen int, final bool) []float64 {
-
-	// reuse per-engine buffer to reduce allocations
 	if cap(e.SegmentBuf) < eventLen {
 		e.SegmentBuf = make([]float64, eventLen)
 	}
@@ -228,7 +200,6 @@ func (e *Engine) synthesizeWithPolicyExplicit(source []float64, byteVal byte, po
 	pitchShift := 0.8 + 0.5*float64(int(byteVal&0x0f))/15.0
 	targetFader := 0.4 + 0.6*policy.Intensity
 
-	// local copies to reduce repeated field access
 	srcLen := len(source)
 	statePos := e.State.Position
 	stateVel := e.State.Velocity
@@ -283,7 +254,6 @@ func (e *Engine) synthesizeWithPolicyExplicit(source []float64, byteVal byte, po
 		e.State.LastGate = gate
 	}
 
-	// write back optimized locals
 	e.State.Position = statePos
 	e.State.Velocity = stateVel
 
@@ -311,21 +281,28 @@ func (e *Engine) updatePhrase(byteVal byte, eventLen int) {
 	}
 }
 
-// SynthesizeSegment is retained for compatibility with older callers.
 func (e *Engine) SynthesizeSegment(source []float64, byteVal byte, position int64) []float64 {
 	return e.SynthesizeEvent(source, byteVal, false)
 }
 
-// Reset clears the motion state
 func (e *Engine) Reset() {
 	e.State = &State{Position: 0, Velocity: 0, LastGate: 1.0}
 	e.SegmentIndex = 0
+	e.BeatPosition = 0.0
+	e.PhraseEnergy = 0.5
+	e.CrossfaderPos = 0.5
+	e.LastGesture = -1
+	e.LastIntensity = 0.6
 }
 
-// ResetKeepingContext resets state but preserves physics memory
 func (e *Engine) ResetKeepingContext() {
 	e.State = &State{Position: 0, Velocity: 0, LastGate: 1.0}
 	e.SegmentIndex = 0
+	e.BeatPosition = 0.0
+	e.PhraseEnergy = 0.5
+	e.CrossfaderPos = 0.5
+	e.LastGesture = -1
+	e.LastIntensity = 0.6
 }
 
 func clamp(value, min, max float64) float64 {
